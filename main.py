@@ -45,7 +45,6 @@ class PicoAccessPoint:
             timeout = 10  # Wait for 10 seconds for AP to activate
             while not self.ap.active() and timeout > 0:
                 print("Waiting for Access Point to activate...")
-                time.sleep(1)
                 timeout -= 1
 
             if self.ap.active():
@@ -53,6 +52,7 @@ class PicoAccessPoint:
                 return True
             else:
                 print("Failed to activate Access Point.")
+                time.sleep(5)
                 return False
         except Exception as e:
             print(f"Error starting Access Point: {e}")
@@ -144,7 +144,7 @@ class PicoWebSocketServer:
                     print(f"Sent data: {json_data}")  # Debugging info
                 except Exception as e:
                     print(f"Error sending data: {e}")
-            await asyncio.sleep(5)  # Send data every 5 seconds
+            await asyncio.sleep(1)  # Send data every 1 seconds
 
     # WebSocket server initialization
     def start_server(self):
@@ -190,17 +190,17 @@ def main():
     pico_ap = PicoAccessPoint(ssid=SSID, password=PASSWORD)
     if pico_ap.start_ap():
         ip = pico_ap.ap.ifconfig()[0]  # Get the AP's IP address
-        time.sleep(5)
+        time.sleep(2)
 
         # Step 2: Initialize and start the WebSocket server
         web_server = PicoWebSocketServer(ip=ip)
-        time.sleep(5)
+        time.sleep(2)
         if web_server.start_server():
             try:
                 # Serve WebSocket requests indefinitely
                 asyncio.run(web_server.serve_forever())
             except KeyboardInterrupt:
-                print("Server stopped by user.")
+                print("Wifi Server stopped by user.")
             finally:
                 # Stop the WebSocket server and access point gracefully
                 web_server.stop_server()
