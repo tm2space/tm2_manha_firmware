@@ -9,6 +9,7 @@ def read_adxl345(imu):
         return {"x": imu.xValue, "y": imu.yValue, "z": imu.zValue}
     except Exception as e:
         print("Failed to read ADXL:", e)
+        return {"x": 0, "y": 0, "z": 0}
         
 def read_gps(gps_sensor, gps_parser):
     try:
@@ -22,6 +23,7 @@ def read_gps(gps_sensor, gps_parser):
                 return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
     except Exception as e:
         print(f"Failed to read GPS:", e)
+        return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
         
 def read_bme680(bme680):
     try:
@@ -29,4 +31,4 @@ def read_bme680(bme680):
 
     except Exception as e:
         print("Error reading bme data:", e)
-        return None
+        return {"temp": -1, "humidity": -1, "pressure": -1, "gas": -1}
