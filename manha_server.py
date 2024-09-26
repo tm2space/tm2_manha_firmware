@@ -36,14 +36,6 @@ def read_gps(gps_sensor, gps_parser):
     except Exception as e:
         print(f"Failed to read GPS:", e)
         
-# Initialize I2C and BME680 sensor
-def init_bme680():
-    try:
-        global bme680
-        bme680 = BME680_I2C(i2c.m_i2c)
-    except Exception as e:
-        print("Failed to initialize BME680:", e)
-        
 def read_bme680(bme680):
     try:
         return {"temp": bme680.temperature, "humidity": bme680.humidity, "pressure": bme680.pressure, "gas": bme680.gas}
