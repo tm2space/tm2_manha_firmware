@@ -40,7 +40,7 @@ async def index(request):
 
 @app.route('/live')
 @with_websocket
-async def temperature_socket(request, ws):
+async def live_socket(request, ws):
     while True:
         try:
             b_d = read_bme680(bme680)
@@ -48,15 +48,16 @@ async def temperature_socket(request, ws):
             g_d = read_gps(gps_sensor, gps_parser)
             
             json_data = str(dict(b_d, **a_d, **g_d))
-                
-    #        frame = self.create_websocket_frame(json_data.encode())
+
             await ws.send(json_data)
             #print(f"Sent data: {json_data}")
-            led.off()
-            time.sleep_ms(500)
-            led.on()
-            time.sleep_ms(500)
+#             led.off()
+#             time.sleep_ms(500)
+#             led.on()
+#             time.sleep_ms(500)
         except Exception as e:
             print(f"Error sending socket data: {e}")
+            machine.reset()
+            pass
 
 app.run(debug=True)

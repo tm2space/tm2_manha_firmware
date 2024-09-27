@@ -14,6 +14,8 @@ def read_adxl345(imu):
 def read_gps(gps_sensor, gps_parser):
     try:
         g_d = gps_sensor.read_gps()
+        if g_d is None:
+            return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
         for byte in g_d:
             stat = gps_parser.update(chr(byte))
             if stat is not None:
