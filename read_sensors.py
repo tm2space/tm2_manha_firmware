@@ -2,8 +2,16 @@ from bme680 import BME680_I2C
 from adxl345 import ADXL345
 from gps import NeoGPS
 from GPSParser import GPSParser
+from uvs12sd import UVS12SD
 
 # Functions to read sensor data
+def read_uv(uv):
+    try:
+        return {"uv": uv.uvValue()}
+    except Exception as e:
+        print("Failed to read UV:", e)
+        return {"uv": 0}
+    
 def read_adxl345(imu):
     try:
         return {"x": imu.xValue, "y": imu.yValue, "z": imu.zValue}
@@ -18,11 +26,8 @@ def read_gps(gps_sensor, gps_parser):
             return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
         for byte in g_d:
             stat = gps_parser.update(chr(byte))
-            if stat is not None:
-                # return parsed GPS data
-                return {"lat": gps_parser.latitude, "lng": gps_parser.longitude, "alt": gps_parser.altitude, "gps_sc": gps_parser.satellites_in_use, "gps_hdop": gps_parser.hdop }
-            else:
-                return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
+            
+        return {"lat": gps_parser.latitude[0], "lng": gps_parser.longitude[0], "alt": gps_parser.altitude, "gps_sc": gps_parser.satellites_in_use, "gps_hdop": gps_parser.hdop }           
     except Exception as e:
         print(f"Failed to read GPS:", e)
         return {"lat": 0.0, "lng": 0.0, "alt": -1, "gps_sc": -1, "gps_hdop": -1 }
