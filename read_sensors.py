@@ -3,6 +3,7 @@ from adxl345 import ADXL345
 from gps import NeoGPS
 from GPSParser import GPSParser
 from uvs12sd import UVS12SD
+from ina219 import INA219
 
 # Functions to read sensor data
 def read_uv(uv):
@@ -39,3 +40,11 @@ def read_bme680(bme680):
     except Exception as e:
         print("Error reading bme data:", e)
         return {"temp": -1, "humidity": -1, "pressure": -1, "gas": -1}
+
+def read_ina219(ina219):
+    try:
+        i_d = ina219.current() # read current
+        return i_d
+    except Exception as e:
+        print("Error reading ina219 data:", e)
+        return -1

@@ -14,6 +14,9 @@ password = 'space1234'
 lora_address_to = 3
 lora_channel_id = 2
 
+R_SHUNT_OHMS = 0.1 # Shunt Resistance in Ohms
+MAX_EXPECTED_AMPS = 0.03 # Max expected current in Amps
+
 led = machine.Pin("LED",machine.Pin.OUT)
 
 ap = network.WLAN(network.AP_IF)
@@ -43,12 +46,16 @@ try:
     imu = ADXL345(i2c.m_i2c)
     uv = UVS12SD(28)
     gs = LoRAComms(lora_channel_id)
+    ina219 = INA219(R_SHUNT_OHMS, i2c.m_i2c, 0.03, address=0x41) # setup ina219 device
+    ina219.configure(ina219.RANGE_16V) # calibrate ina219
 except Exception as e:
+    print(e)
     while True:
         led_matrix.fill(PixelColors.BLUE)
         time.sleep_ms(500)
         led_matrix.clear()
         time.sleep_ms(500)
+
 
 @app.route('/')
 async def index(request):
@@ -69,8 +76,9 @@ async def live_socket(request, ws):
             a_d = read_adxl345(imu)
             g_d = read_gps(gps_sensor, gps_parser)
             uv_d = read_uv(uv)
+            ina_d = read_ina219(ina219)
             
-            json_data = str(dict(b_d, **a_d, **g_d, **uv_d))
+            json_data = str(dict(b_d, ina_d, **a_d, **g_d, **uv_d))
 
             await ws.send(json_data)
 
