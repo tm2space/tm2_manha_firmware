@@ -11,7 +11,7 @@ from dotmatrix import *
 ssid = 'MANHA v2'
 password = 'space1234'
 
-lora_address_to = 2
+lora_address_to = 3
 
 led = machine.Pin("LED",machine.Pin.OUT)
 
@@ -38,7 +38,7 @@ bme680 = BME680_I2C(i2c.m_i2c)
 imu = ADXL345(i2c.m_i2c)
 uv = UVS12SD(28)
 gs = LoRAComms(2)
-led_matrix = DotMatrix(8,8,3)
+led_matrix = DotMatrix(8,8,3,initial_color=PixelColors.WHITE) # start led matrix with white fill
 
 @app.route('/')
 async def index(request):
@@ -47,13 +47,14 @@ async def index(request):
 async def not_found(request):
     return {'error': 'invalid manha resource requested'}, 404
 
+    
+
 @app.route('/live')
 @with_websocket
 async def live_socket(request, ws):
     while True:
+        led_matrix.clear()
         try:
-            led_matrix.fill(PixelColors.BLUE)
-
             b_d = read_bme680(bme680)
             a_d = read_adxl345(imu)
             g_d = read_gps(gps_sensor, gps_parser)
@@ -64,27 +65,28 @@ async def live_socket(request, ws):
             await ws.send(json_data)
 
             # send data in blocking mode over lora
-            lora_status = gs.send1(json_data, lora_address_to)
+            lora_status = gs.send(json_data, lora_address_to)
 
             # fill matrix with red if lora send failed, green if success
             if not lora_status:
                 raise Exception("LoRa send failed")
             else:
                 led_matrix.fill(PixelColors.GREEN)
-                time.sleep_ms(1000)
-                led_matrix.clear()
+
             
             print(f"Sent data: {json_data}")
             led.off()
             time.sleep_ms(500)
             led.on()
             time.sleep_ms(500)
+            
         except Exception as e:
             print(f"Error sending socket data: {e}")
 
             led_matrix.fill(PixelColors.RED)
-            time.sleep_ms(500)
+            time.sleep_ms(2000)
             led_matrix.clear()
+            
             machine.reset()
             pass
 

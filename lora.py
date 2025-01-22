@@ -23,8 +23,7 @@ class SPIConfig():
     esp32_2 = (2, 18, 23, 19)
 
 class LoRa(object):
-    def __init__(self, this_address, freq=868.0, tx_power=14,
-                 modem_config=ModemConfig.Bw125Cr45Sf128, receive_all=False, acks=False, crypto=None):
+    def __init__(self, this_address, freq=433.0, tx_power=14, modem_config=ModemConfig.Bw125Cr45Sf128, receive_all=False, acks=False, crypto=None):
         """
         Lora(this_address, freq=868.0, tx_power=14,
                  modem_config=ModemConfig.Bw125Cr45Sf128, receive_all=False, acks=False, crypto=None)
@@ -117,19 +116,19 @@ class LoRa(object):
     def set_mode_tx(self):
         if self._mode != MODE_TX:
             self._spi_write(REG_01_OP_MODE, MODE_TX)
-            self._spi_write(REG_40_DIO_MAPPING1, 0x40)  # Interrupt on TxDone
+#             self._spi_write(REG_40_DIO_MAPPING1, 0x40)  # Interrupt on TxDone
             self._mode = MODE_TX
 
     def set_mode_rx(self):
         if self._mode != MODE_RXCONTINUOUS:
             self._spi_write(REG_01_OP_MODE, MODE_RXCONTINUOUS)
-            self._spi_write(REG_40_DIO_MAPPING1, 0x00)  # Interrupt on RxDone
+#             self._spi_write(REG_40_DIO_MAPPING1, 0x00)  # Interrupt on RxDone
             self._mode = MODE_RXCONTINUOUS
             
     def set_mode_cad(self):
         if self._mode != MODE_CAD:
             self._spi_write(REG_01_OP_MODE, MODE_CAD)
-            self._spi_write(REG_40_DIO_MAPPING1, 0x80)  # Interrupt on CadDone
+#             self._spi_write(REG_40_DIO_MAPPING1, 0x80)  # Interrupt on CadDone
             self._mode = MODE_CAD
 
     def _is_channel_active(self):
@@ -209,7 +208,7 @@ class LoRa(object):
                     if self._last_payload.header_to == self._this_address and \
                             self._last_payload.header_flags & FLAGS_ACK and \
                             self._last_payload.header_id == self._last_header_id:
-
+                            
                         # We got an ACK
                         return True
         return False
@@ -237,6 +236,62 @@ class LoRa(object):
             data = self.spi.read(length + 1, register)[1:]
         self.cs.value(1)
         return data
+        
+    def _wait_flag_set(self, flag):
+        irq_flags = self._spi_read(REG_12_IRQ_FLAGS)
+        
+        start = time.time()
+        while time.time() - start < self.wait_packet_sent_timeout:
+            if self._mode == MODE_TX and (irq_flags & flag):
+                self.set_mode_idle()
+                return True
+        return False
+    
+    def decode_data(self):
+        packet_len = self._spi_read(REG_13_RX_NB_BYTES)
+        self._spi_write(REG_0D_FIFO_ADDR_PTR, self._spi_read(REG_10_FIFO_RX_CURRENT_ADDR))
+
+        packet = self._spi_read(REG_00_FIFO, packet_len)
+        self._spi_write(REG_12_IRQ_FLAGS, 0xff)  # Clear all IRQ flags
+
+        snr = self._spi_read(REG_19_PKT_SNR_VALUE) / 4
+        rssi = self._spi_read(REG_1A_PKT_RSSI_VALUE)
+
+        if snr < 0:
+            rssi = snr + rssi
+        else:
+            rssi = rssi * 16 / 15
+
+        if self._freq >= 779:
+            rssi = round(rssi - 157, 2)
+        else:
+            rssi = round(rssi - 164, 2)
+
+        if packet_len >= 4:
+            header_to = packet[0]
+            header_from = packet[1]
+            header_id = packet[2]
+            header_flags = packet[3]
+            message = bytes(packet[4:]) if packet_len > 4 else b''
+
+            if (self._this_address != header_to) and ((header_to != BROADCAST_ADDRESS) or (self._receive_all is False)):
+                return
+
+            if self.crypto and len(message) % 16 == 0:
+                message = self._decrypt(message)
+
+            if self._acks and header_to == self._this_address and not header_flags & FLAGS_ACK:
+                self.send_ack(header_from, header_id)
+
+            self.set_mode_rx()
+
+            self._last_payload = namedtuple(
+                "Payload",
+                ['message', 'header_to', 'header_from', 'header_id', 'header_flags', 'rssi', 'snr']
+            )(message, header_to, header_from, header_id, header_flags, rssi, snr)
+
+            if not header_flags & FLAGS_ACK:
+                self.on_recv(self._last_payload)
         
     def _handle_interrupt(self, channel):
         irq_flags = self._spi_read(REG_12_IRQ_FLAGS)

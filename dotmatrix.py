@@ -2,26 +2,16 @@ import machine
 from neopixel import NeoPixel
 import time
 
+
 class PixelColors:
     """Common Colors Enum class for DotMatrix"""
-    @property
-    def RED(self) -> tuple:
-        return (20,0,0)
+    
+    RED = (20,0,0)
+    GREEN = (0,20,0)
+    BLUE = (0,0,20)
+    WHITE = (20,20,20)
+    CLEAR = (0,0,0)
 
-    @property
-    def GREEN(self) -> tuple:
-        return (0,20,0)
-
-    @property
-    def BLUE(self) -> tuple:
-        return (0,0,20)
-
-    @property
-    def WHITE(self) -> tuple:
-        return (20,20,20)
-
-    def CLEAR(self) -> tuple:
-        return (0,0,0)
 
 class DotMatrix:
     """Driver for CJMCU 8x8 WS2812 LED Matrix
@@ -42,7 +32,7 @@ class DotMatrix:
 
     def fill(self, color) -> None:
         """Set all leds in matrix to 'color'"""
-        if self.color is None:
+        if color is None:
             print('Color not provided!')
         else:
             self._neopixel.fill(color)
@@ -55,7 +45,7 @@ class DotMatrix:
 
     def setPixel(self, x, y, color):
         """Set lED at (x,y) in matrix to (0,0,0)"""
-        if self.color is None:
+        if color is None:
             print('Color not provided!')
         else:
             self._neopixel[(8 * y) + x] = color
