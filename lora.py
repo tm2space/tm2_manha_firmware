@@ -298,10 +298,3 @@ class LoRa(object):
 
     def close(self):
         self.spi.deinit()
-
-
-lora = LoRa((1,10,11,8), None, 1, 9)        
-        
-while True:
-    lora.send_to_wait('test succesfful', 2)
-    time.sleep(1000)

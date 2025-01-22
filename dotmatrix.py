@@ -69,19 +69,3 @@ class DotMatrix:
     def __getitem__(self, idx) -> tuple:
         """Get individual LED in matrix as array"""
         return self._neopixel[idx]
-
-
-if __name__ == '__main__':
-
-    width = 8
-    height = 8
-
-    matrix = DotMatrix()
-
-    while True:
-        matrix.fill(PixelColors.WHITE)
-        for y in range(height):
-            for x in range(width):
-                matrix.setPixel(x,y,PixelColors.BLUE)
-                time.sleep(100)
-        time.sleep(1000)
