@@ -33,13 +33,22 @@ print(ip)
 app = Microdot()
 
 i2c.init_i2c()
-gps_sensor = NeoGPS()
-gps_parser = GPSParser(location_formatting='dd')
-bme680 = BME680_I2C(i2c.m_i2c)
-imu = ADXL345(i2c.m_i2c)
-uv = UVS12SD(28)
-gs = LoRAComms(lora_channel_id)
+
 led_matrix = DotMatrix(8,8,3,initial_color=PixelColors.WHITE) # start led matrix with white fill
+
+try:
+    gps_sensor = NeoGPS()
+    gps_parser = GPSParser(location_formatting='dd')
+    bme680 = BME680_I2C(i2c.m_i2c)
+    imu = ADXL345(i2c.m_i2c)
+    uv = UVS12SD(28)
+    gs = LoRAComms(lora_channel_id)
+except Exception as e:
+    while True:
+        led_matrix.fill(PixelColors.BLUE)
+        time.sleep_ms(500)
+        led_matrix.clear()
+        time.sleep_ms(500)
 
 @app.route('/')
 async def index(request):
