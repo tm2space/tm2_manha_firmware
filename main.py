@@ -12,6 +12,7 @@ ssid = 'MANHA v2'
 password = 'space1234'
 
 lora_address_to = 3
+lora_channel_id = 2
 
 led = machine.Pin("LED",machine.Pin.OUT)
 
@@ -37,7 +38,7 @@ gps_parser = GPSParser(location_formatting='dd')
 bme680 = BME680_I2C(i2c.m_i2c)
 imu = ADXL345(i2c.m_i2c)
 uv = UVS12SD(28)
-gs = LoRAComms(2)
+gs = LoRAComms(lora_channel_id)
 led_matrix = DotMatrix(8,8,3,initial_color=PixelColors.WHITE) # start led matrix with white fill
 
 @app.route('/')
@@ -52,8 +53,8 @@ async def not_found(request):
 @app.route('/live')
 @with_websocket
 async def live_socket(request, ws):
+    led_matrix.clear()
     while True:
-        led_matrix.clear()
         try:
             b_d = read_bme680(bme680)
             a_d = read_adxl345(imu)
@@ -70,22 +71,22 @@ async def live_socket(request, ws):
             # fill matrix with red if lora send failed, green if success
             if not lora_status:
                 raise Exception("LoRa send failed")
-            else:
-                led_matrix.fill(PixelColors.GREEN)
-
             
             print(f"Sent data: {json_data}")
             led.off()
+            led_matrix.fill(PixelColors.GREEN)
             time.sleep_ms(500)
+            led_matrix.clear()
             led.on()
             time.sleep_ms(500)
+            led_matrix.fill(PixelColors.GREEN)
+            time.sleep_ms(500)
+            led_matrix.clear()
             
         except Exception as e:
             print(f"Error sending socket data: {e}")
 
             led_matrix.fill(PixelColors.RED)
-            time.sleep_ms(2000)
-            led_matrix.clear()
             
             machine.reset()
             pass
