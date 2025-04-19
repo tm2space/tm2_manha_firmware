@@ -9,9 +9,12 @@ import machine
 import asyncio
 import time
 import gc
+
 from manha.internals.comms.wifi.microdot import Microdot, send_file
 from manha.internals.comms.wifi.microdot.websocket import with_websocket
 from collections import namedtuple
+
+from manha.utils import calculate_checksum
 
 # Import all needed modules upfront
 from manha.satkit.peripherals import LEDMatrix, PixelColors, GPS, Accelerometer, UVSensor, PowerMonitor, ManhaSensor  
@@ -48,18 +51,14 @@ def sample_lora_rx_callback(raw_payload: tuple) -> namedtuple:
     sender_id = raw_bytes[0] if len(raw_bytes) > 0 else 0
     receiver_id = raw_bytes[1] if len(raw_bytes) > 1 else 0
     
-    # Extract checksum and message from the remaining bytes
-    if len(raw_bytes) > 2:
-        cmd_code = raw_bytes[3]
-        cmd_data = raw_bytes[4:]
-    else:
-        cmd_code = cmd_data = b''
+    # Extract the actual message - everything after the first 2 bytes
+    message_bytes = raw_bytes[2:] if len(raw_bytes) > 2 else b''
     
     # Create a structured payload from the raw data
     payload = namedtuple(
         "Payload",
-        ['sender_id', 'target_id', 'cmd_code', 'cmd_data', 'rssi', 'snr']
-    )(sender_id, receiver_id, cmd_code, cmd_data, rssi, snr)
+        ['sender_id', 'target_id', 'message_bytes', 'rssi', 'snr']
+    )(sender_id, receiver_id, message_bytes, rssi, snr)
     
     # save to file 
     with open("lora_payload.txt", "a") as f:
@@ -68,7 +67,7 @@ def sample_lora_rx_callback(raw_payload: tuple) -> namedtuple:
     return payload
 
 class MANHA:
-    def __init__(self, ssid=_SSID, password=_PASS, lora_address_to=_LORA_ADDR_TO, lora_address_self=_LORA_ADDR_SELF, lora_rx_callback=sample_lora_rx_callback):
+    def __init__(self, ssid=_SSID, password=_PASS, lora_address_to=_LORA_ADDR_TO, lora_address_self=_LORA_ADDR_SELF, lora_rx_callback=None):
         """Initialize the MANHA class with default configuration
         
         Args:
@@ -76,14 +75,25 @@ class MANHA:
             password (str): Password for the access point
             lora_address_to (int): LoRa address to send data to
             lora_address_self (int): LoRa address for this device
-            lora_rx_callback (Callable[namedtuple]): Function to call on reception
+            lora_rx_callback (Callable[namedtuple]): Function to call on reception, defaults to internal command handler
         """
         # Configuration
         self.ssid = ssid
         self.password = password
         self.lora_address_to = lora_address_to
         self.lora_address_self = lora_address_self
-        self.lora_rx_callback = lora_rx_callback
+        
+        # Set up command system
+        self.commands = {
+            "ping": self.cmd_ping,
+            "reboot": self.cmd_reboot,
+            "status": self.cmd_status,
+            "sensors": self.cmd_sensors,
+            "tx-power": self.cmd_tx_power,
+        }
+        
+        # Use internal command handler if none provided
+        self.lora_rx_callback = lora_rx_callback if lora_rx_callback else self.handle_command
         
         # Create a mutex for telemetry string protection
         self.telemetry_lock = asyncio.Lock()
@@ -129,12 +139,171 @@ class MANHA:
             reset_pin=reset_pin, 
             freq=868.0,
             tx_power=14,
-            recv_callback=self.lora_rx_callback,  # Set the callback for received messages
+            recv_callback=self.lora_rx_callback,
         )
+        # Register our command handler for message reception
+        self.lora.on_receive = self.handle_received_data
         print('LoRa Initialized')
         
         # Run garbage collection after initialization
         gc.collect()
+    
+    # Add the missing handle_command method
+    def handle_command(self, raw_payload):
+        """
+        Default callback for processing LoRa messages in command format
+        
+        Args:
+            raw_payload: The raw packet data from the LoRa driver, a tuple of (data, rssi, snr)
+            
+        Returns:
+            namedtuple: A structured payload object
+        """
+        print("Received raw payload:", raw_payload)
+        # Process the raw payload into a structured format first
+        payload = sample_lora_rx_callback(raw_payload)
+        
+        # If this is a message destined for us, schedule it for processing
+        if payload.target_id == self.lora_address_self or payload.target_id == 0xFF:  # 0xFF for broadcast
+            try:
+                # Decode the message bytes to a string
+                checksum = payload.message_bytes[0]
+                if checksum != calculate_checksum(payload.message_bytes[1:]):
+                    raise("Checksum mismatch!")
+                
+                message = payload.message_bytes[1:].decode('utf-8')
+                print(f"Received message from ground station: {message}")
+                # Create a task to process the command asynchronously
+                asyncio.create_task(self.handle_received_data(message, payload.sender_id))
+            except UnicodeError as e:
+                print(f"Error decoding message: {e}")
+            except Exception as e:
+                print(f"Error processing command: {e}")
+                
+        return payload
+
+    # Command handler methods
+    async def handle_received_data(self, message, from_address):
+        """
+        Process data received from the ground station
+        
+        Args:
+            message (str): The message received from the ground station
+            from_address (int): The address of the sender
+        """
+        # Only process messages from the ground station address
+        if from_address != self.lora_address_to:
+            return
+        
+        print(f"RX :: From {from_address} :: {message}")
+        
+        try:
+            # Check if this is a command message
+            if message.startswith("CMD:"):
+                await self.process_command(message[4:], from_address)
+            # Check for other common message prefixes
+            elif message.startswith("GS "):
+                # Ground station message
+                print(f"Ground station message: {message}")
+                await self.lora.send_async(f"ACK:GS message received", from_address)
+            else:
+                # Handle as regular message
+                print(f"Regular message: {message}")
+                # Send acknowledgment
+                await self.lora.send_async(f"ACK:Message received", from_address)
+        except Exception as e:
+            print(f"Error processing received data: {e}")
+            try:
+                # Send error message back
+                await self.lora.send_async(f"ERR:Command processing failed: {str(e)}", from_address)
+            except:
+                pass
+    
+    async def process_command(self, command_str, from_address):
+        """
+        Process a command string from the ground station
+        
+        Args:
+            command_str (str): The command string to process
+            from_address (int): The address to send response to
+        """
+        # Split into command and arguments
+        parts = command_str.strip().split()
+        if not parts:
+            return
+        
+        command = parts[0].lower()
+        args = parts[1:] if len(parts) > 1 else []
+        
+        # Visual indication of command reception
+        self.led_matrix.fill(PixelColors.BLUE)
+        await asyncio.sleep(0.1)
+        self.led_matrix.clear()
+        
+        # Check if command exists in our command dictionary
+        if command in self.commands:
+            try:
+                # Execute the command handler with arguments
+                result = await self.commands[command](args, from_address)
+                # Send acknowledgment if handler didn't send a response
+                if result is None:
+                    await self.lora.send_async(f"ACK:{command} executed successfully", from_address)
+            except Exception as e:
+                print(f"Command execution error: {e}")
+                await self.lora.send_async(f"ERR:{command} failed: {str(e)}", from_address)
+        else:
+            # Command not recognized
+            await self.lora.send_async(f"ERR:Unknown command: {command}", from_address)
+    
+    # Command handler implementations
+    async def cmd_ping(self, args, from_address):
+        """Handle ping command - send back timestamp"""
+        timestamp = time.time()
+        await self.lora.send_async(f"PING:{timestamp}", from_address)
+        return True  # Response sent
+    
+    async def cmd_reboot(self, args, from_address):
+        """Handle reboot command - restart the satellite"""
+        await self.lora.send_async(f"ACK:Rebooting satellite", from_address)
+        await asyncio.sleep(1)  # Give time for ACK to be sent
+        machine.reset()
+        return True  # Response sent
+    
+    async def cmd_status(self, args, from_address):
+        """Handle status command - send back system status"""
+        status = {
+            "uptime": time.time(),
+            "memory": gc.mem_free(),
+            "sensors_active": len(self.sensors),
+            "wifi_clients": len([c for c in self.ap.status('stations') if c]),
+        }
+        status_json = str(status)
+        await self.lora.send_async(f"STATUS:{status_json}", from_address)
+        return True  # Response sent
+    
+    async def cmd_sensors(self, args, from_address):
+        """Handle sensors command - send back sensor readings"""
+        # Use the latest telemetry data
+        sensor_json = str(self.telemetry_data)
+        await self.lora.send_async(f"SENSORS:{sensor_json}", from_address)
+        return True  # Response sent
+    
+    async def cmd_tx_power(self, args, from_address):
+        """Handle tx-power command - set LoRa transmitter power"""
+        if not args:
+            await self.lora.send_async(f"ERR:tx-power requires a value (5-23)", from_address)
+            return True
+        
+        try:
+            power = int(args[0])
+            if 5 <= power <= 23:
+                self.lora.set_tx_power(power)
+                await self.lora.send_async(f"ACK:TX power set to {power}dBm", from_address)
+            else:
+                await self.lora.send_async(f"ERR:TX power must be between 5 and 23dBm", from_address)
+        except ValueError:
+            await self.lora.send_async(f"ERR:Invalid TX power value", from_address)
+        return True  # Response sent
     
     def setup_default_sensors(self):
         """Initialize the default set of sensors"""
@@ -210,7 +379,7 @@ class MANHA:
                         json_data = self.telemetry_string
                     
                     await ws.send(json_data)
-                    print(f"Sent websocket data: {json_data}")
+                    # print(f"Sent websocket data: {json_data}")
                     
                     await asyncio.sleep(1)
                     
@@ -230,7 +399,7 @@ class MANHA:
     async def blink_led_matrix(self, color):
         self.led_matrix.blink(color, 100)
         
-    async def send_tlm_task(self, interval=1):
+    async def lora_tlm_task(self, interval=1):
         """Task to send telemetry data periodically"""
         while True:
             await asyncio.sleep(interval)  # Wait for the specified interval before sending again
@@ -245,8 +414,6 @@ class MANHA:
                     send_result = await self.lora.send_async(new_telemetry, self.lora_address_to)
                     if not send_result:
                         print(f"LORA SEND FAILED: Could not send telemetry data")
-                
-                print(f'Updated telemetry: {new_telemetry}')
                 
                 # Visual indication of successful sensor reading
                 self.led_matrix.fill(PixelColors.GREEN)
@@ -324,11 +491,14 @@ class MANHA:
         # Run garbage collection before starting tasks
         gc.collect()
         
+        # Create the receiver task for LoRa
+        self.lora_task = asyncio.create_task(self.lora.start_receiver())
+        
         # Create and start the sensor reading task
         self.sensor_task = asyncio.create_task(self.read_sensors_task(2))
         
         # telemetry task to send data periodically
-        self.send_task = asyncio.create_task(self.send_tlm_task(2))
+        self.send_task = asyncio.create_task(self.lora_tlm_task(2))
         
         # Start the web server
         self.app_task = asyncio.create_task(self.app.start_server(port=80))

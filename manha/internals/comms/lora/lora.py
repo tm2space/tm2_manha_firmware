@@ -2,6 +2,11 @@
 ▀▀█▀▀ █▀▄▀█ ▀▀▀▀█ ▄▀▀▀▀ █▀▀▀▄ ▄▀▀▀▄ ▄▀▀▀▀ █▀▀▀▀ 
   █   █   █ █▀▀▀▀  ▀▀▀▄ █▀▀▀  █▀▀▀█ █     █▀▀   
   ▀   ▀   ▀ ▀▀▀▀▀ ▀▀▀▀  ▀     ▀   ▀  ▀▀▀▀ ▀▀▀▀▀ 
+
+LoRa communication module for the manha project.
+
+This module provides a high-level interface for LoRa communication, including
+sending and receiving data, as well as configuring the LoRa radio parameters.
 """
 
 import time
@@ -11,22 +16,7 @@ from machine import Pin, SPI
 
 from manha.internals.drivers import RFM9x, ModemConfig
 from manha.internals.drivers.rfm9x_constants import *
-
-def calculate_checksum(data: bytes) -> int:
-    """
-    Calculate a simple checksum for the given data.
-    
-    Args:
-        data: The bytes data to calculate checksum for
-        
-    Returns:
-        int: The calculated checksum (0-255)
-    """
-    # Simple sum of bytes modulo 256
-    checksum = 0
-    for byte in data:
-        checksum = (checksum + byte) % 256
-    return checksum
+from manha.utils import calculate_checksum
 
 def default_recv_callback(raw_payload: tuple) -> namedtuple:
     """
@@ -163,7 +153,7 @@ class LoRa:
         """
         try:
             async with self._lock:
-                print(f"Sending data to {target_id}: {data}")
+                # print(f"Sending data to {target_id}: {data}")
                 # Make sure we're in idle mode before sending
                 self._modem.set_mode_idle()
                 
@@ -199,7 +189,7 @@ class LoRa:
                     irq_flags = self._modem._spi_read(REG_12_IRQ_FLAGS)
                     if irq_flags & TX_DONE:
                         self._modem.clear_irq_flags()
-                        print(f"Transmission to {target_id} completed successfully")
+                        # print(f"Transmission to {target_id} completed successfully")
                         # Return to idle mode after transmission
                         self._modem.set_mode_idle()
                         return True

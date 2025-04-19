@@ -52,7 +52,7 @@ manha/                      # Main source code directory
 
 build/                      # Compiled output directory
 └── manha/
-    └── *.mpy                   # Compiled MicroPython files
+    └── *.mpy               # Compiled MicroPython files
 ```
 
 ## How to install
@@ -67,6 +67,9 @@ build/                      # Compiled output directory
 The firmware uses MicroPython's `.mpy` format for efficient execution on the Pico. To compile the Python files:
 
 ```bash
+# install the mpy-cross compiler for .py to .mpy
+pip3 install mpy-cross
+
 # Compile all Python files to .mpy
 make build
 
