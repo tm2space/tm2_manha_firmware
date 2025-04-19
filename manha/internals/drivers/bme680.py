@@ -37,11 +37,11 @@ MicroPython driver from BME680 air quality sensor, based on Adafruit_bme680
 import time
 import math
 from micropython import const
-from ubinascii import hexlify as hex
+from binascii import hexlify as hex
 try:
     import struct
 except ImportError:
-    import ustruct as struct
+    import struct as struct
 
 #    I2C ADDRESS/BITS/SETTINGS
 #    -----------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from machine import Pin,I2C
 import math
 import time
+from micropython import const
 
 device = const(0x53)
 regAddress = const(0x32)

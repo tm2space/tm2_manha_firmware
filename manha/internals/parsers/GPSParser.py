@@ -13,13 +13,7 @@
 from math import floor, modf
 
 # Import utime or time for fix time handling
-try:
-    # Assume running on MicroPython
-    import utime
-except ImportError:
-    # Otherwise default to time module for non-embedded implementations
-    # Should still support millisecond resolution.
-    import time
+import time
 
 
 class GPSParser(object):
@@ -635,7 +629,7 @@ class GPSParser(object):
         """Updates a high resolution counter with current time when fix is updated. Currently only triggered from
         GGA, GSA and RMC sentences"""
         try:
-            self.fix_time = utime.ticks_ms()
+            self.fix_time = time.ticks_ms()
         except NameError:
             self.fix_time = time.time()
 
@@ -678,7 +672,7 @@ class GPSParser(object):
         # Try calculating fix time using utime; if not running MicroPython
         # time.time() returns a floating point value in secs
         try:
-            current = utime.ticks_diff(utime.ticks_ms(), self.fix_time)
+            current = time.ticks_diff(time.ticks_ms(), self.fix_time)
         except NameError:
             current = (time.time() - self.fix_time) * 1000  # ms
 
