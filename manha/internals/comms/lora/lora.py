@@ -55,6 +55,7 @@ def default_recv_callback(raw_payload: tuple) -> namedtuple:
     # save to file 
     with open("lora_payload.txt", "a") as f:
         f.write(f"{time.time()}: {payload}\n")
+        print(f"{time.time()}: {payload}\n")
     
     return payload
 

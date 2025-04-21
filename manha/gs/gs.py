@@ -71,7 +71,7 @@ class ManhaGS:
         self.received_data = {}  # Store for received telemetry
         
         # Command system settings
-        self.heartbeat_enabled = True
+        self.heartbeat_enabled = False
         self.command_buffer = ""
         
         # Initialize hardware
@@ -93,7 +93,8 @@ class ManhaGS:
             
             # Add timeout parameter to prevent hanging
             self.lora = LoRa(
-                device_id=self.lora_address_from, 
+                device_id=self.lora_address_from,
+#                 recv_callback=self.handle_received_data(),
                 cs_pin=cs_pin, 
                 spi=spi, 
                 reset_pin=reset_pin, 
@@ -101,9 +102,7 @@ class ManhaGS:
                 tx_power=14,
                 timeout_ms=500  # Add 500ms timeout to prevent hanging
             )
-        
-            # Register command handler for message reception
-            self.lora.on_receive = self.handle_received_data
+            
             print('LoRa Initialized')
             
             # Run garbage collection after LoRa setup
@@ -295,7 +294,7 @@ class ManhaGS:
             # Run garbage collection periodically
             gc.collect()
 
-    async def handle_received_data(self, message, from_address):
+    def handle_received_data(self):
         """
         Process data received from the satellite
         
@@ -303,48 +302,55 @@ class ManhaGS:
             message (str): The message received from the satellite
             from_address (int): The address of the sender
         """
-        # Only process messages from the satellite address
-        if from_address != self.lora_address_to:
-            return
-            
-        print(f"\nRX :: From {from_address} :: {message}")
         
-        # Parse the message based on its prefix
-        if message.startswith("STATUS:"):
-            # Handle status response
-            status_data = message[7:].strip()
-            async with self.data_lock:
-                self.received_data["status"] = status_data
-            print(f"Satellite status: {status_data}")
+
+        async def handle_recv(messafe, from_address):
+            print(f"{from_address=} {message=}")
             
-        elif message.startswith("SENSORS:"):
-            # Handle sensor data
-            sensor_data = message[8:].strip()
-            async with self.data_lock:
-                self.received_data["sensors"] = sensor_data
-            print(f"Sensor data: {sensor_data}")
+            # Only process messages from the satellite address
+            if from_address != self.lora_address_to:
+                return
+                
+            print(f"\nRX :: From {from_address} :: {message}")
             
-        elif message.startswith("PING:"):
-            # Handle ping response
-            ping_data = message[5:].strip()
-            print(f"Ping response received: {ping_data}")
+            # Parse the message based on its prefix
+            if message.startswith("STATUS:"):
+                # Handle status response
+                status_data = message[7:].strip()
+                async with self.data_lock:
+                    self.received_data["status"] = status_data
+                print(f"Satellite status: {status_data}")
+                
+            elif message.startswith("SENSORS:"):
+                # Handle sensor data
+                sensor_data = message[8:].strip()
+                async with self.data_lock:
+                    self.received_data["sensors"] = sensor_data
+                print(f"Sensor data: {sensor_data}")
+                
+            elif message.startswith("PING:"):
+                # Handle ping response
+                ping_data = message[5:].strip()
+                print(f"Ping response received: {ping_data}")
+                
+            elif message.startswith("ACK:"):
+                # Handle command acknowledgment
+                ack_data = message[4:].strip()
+                print(f"Command acknowledged: {ack_data}")
+                
+            elif message.startswith("ERR:"):
+                # Handle error response
+                err_data = message[4:].strip()
+                print(f"Error from satellite: {err_data}")
+                
+            else:
+                # Handle generic message
+                print(f"Message from satellite: {message}")
+                
+            # Add prompt back after receiving message
+            print("> ", end="")
             
-        elif message.startswith("ACK:"):
-            # Handle command acknowledgment
-            ack_data = message[4:].strip()
-            print(f"Command acknowledged: {ack_data}")
-            
-        elif message.startswith("ERR:"):
-            # Handle error response
-            err_data = message[4:].strip()
-            print(f"Error from satellite: {err_data}")
-            
-        else:
-            # Handle generic message
-            print(f"Message from satellite: {message}")
-            
-        # Add prompt back after receiving message
-        print("> ", end="")
+        return handle_recv
     
     async def shutdown(self):
         """
