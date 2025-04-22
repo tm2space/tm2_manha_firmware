@@ -1,6 +1,6 @@
 import asyncio
 import json
-from microdot.helpers import wraps
+from ..microdot.helpers import wraps
 
 
 class SSE:

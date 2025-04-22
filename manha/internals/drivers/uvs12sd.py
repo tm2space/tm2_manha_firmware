@@ -8,6 +8,7 @@ class UVS12SD:
         self._pin = ADC(Pin(pin))
         #self._pin.atten(ADC.ATTN_11DB)
         
+    @property
     def uvValue(self):
         time.sleep(0.1)
         return self._pin.read_u16()
