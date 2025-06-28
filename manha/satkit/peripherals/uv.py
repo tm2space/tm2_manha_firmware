@@ -22,7 +22,7 @@ class UVSensor(ManhaSensor):
             dict: Dictionary containing UV value.
         """
         try:
-            return {'uv': ((self._uv_sensor.uvValue/65535) * 5.0)}
+            return {'uv': ((self._uv_sensor.uvValue * 0.8) / 1000)}
         except Exception as e:
             print("Error reading UV sensor data:", e)
             return {'uv': -1}

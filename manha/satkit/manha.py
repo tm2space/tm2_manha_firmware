@@ -175,15 +175,13 @@ class MANHA:
         # Power Monitor function (essential) - using INA219 directly
         def read_power():
             try:
-                if not hasattr(self, '_ina219'):
-                    self._ina219 = INA219(shunt_ohms=0.1, i2c=i2c.m_i2c, max_expected_amps=3.0)
-                    self._ina219.configure()
-                voltage = self._ina219.voltage()
-                # Convert to percentage (assuming 3.7V nominal for Li-ion)
-                percentage = min(100, max(0, (voltage - 3.0) / 1.2 * 100))
-                return {'v_p': percentage, 'v_raw': voltage}
+                if not hasattr(self, '_pwr_mon'):
+                    from manha.satkit.peripherals import PowerMonitor
+                    self._pwr_mon = PowerMonitor(shunt_ohms=0.1, i2c=i2c.m_i2c, max_expected_amps=3.0)
+                pwr_rd = self._pwr_mon.read()
+                return pwr_rd
             except Exception as e:
-                return {'v_p': 50, 'v_raw': 3.7}  # Default safe values
+                return {'v_p': -1, 'v_raw': -1}  # Default safe values
         
         # GPS function (essential) - using NeoGPS and GPSParser directly
         def read_gps():
@@ -238,6 +236,17 @@ class MANHA:
                 except:
                     return {'a_x': 0, 'a_y': 0, 'a_z': 0}
             
+            def read_uv():
+                try:
+                    if not hasattr(self, '_uv_sensor'):
+                        from manha.satkit.peripherals import UVSensor
+                        self._uv_sensor = UVSensor()
+                    return {
+                        'uv': self._uv_sensor.read()
+                        }
+                except:
+                    return { 'uv': -1 }
+            
             # Environmental sensor - using BME680 directly
             def read_env():
                 try:
@@ -249,7 +258,7 @@ class MANHA:
                         'hum': self._bme680.humidity
                     }
                 except:
-                    return {'temp': 25, 'pres': 1013, 'hum': 50}
+                    return {'temp': -1, 'pres': -1, 'hum': -1}
             
             try:
                 self.add_sensor(read_imu, essential=False)
@@ -257,6 +266,13 @@ class MANHA:
                 gc.collect()
             except:
                 print('IMU failed')
+                
+            try:
+                self.add_sensor(read_uv, essential=False)
+                print('UVS12SD UV Sensor OK')
+                gc.collect()
+            except:
+                print('UVS12SD failed')
             
             try:
                 self.add_sensor(read_env, essential=False)

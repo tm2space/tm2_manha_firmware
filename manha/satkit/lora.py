@@ -42,7 +42,7 @@ class LoRa:
             led_matrix: LED matrix instance for visual indicators
         """
         self.device_id = device_id
-        self.ground_station_address = None  # Set when first packet received
+        self.ground_station_address = device_id
         self.led_matrix = led_matrix  # LED matrix for visual feedback
         
         # Initialize hardware
@@ -132,7 +132,7 @@ class LoRa:
             bool: True if sent successfully
         """
         if target_addr is None:
-            target_addr = self.ground_station_address or 255  # Broadcast if unknown
+            target_addr = self.ground_station_address
         
         try:
             # Check if we need to send RESET_OK first
@@ -334,10 +334,6 @@ class LoRa:
             packet = Packet.decode(raw_data, rssi, snr)
             if not packet or not packet.is_valid_checksum():
                 return
-            
-            # Set ground station address from first valid packet
-            if self.ground_station_address is None:
-                self.ground_station_address = packet.addr_from
             
             message = packet.message.decode('utf-8').strip()
             

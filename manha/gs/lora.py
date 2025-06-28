@@ -40,7 +40,7 @@ class LoRa:
             timeout_ms: Operation timeout
         """
         self.device_id = device_id
-        self.satellite_address = None  # Set when first packet received
+        self.satellite_address = device_id  # Set when first packet received
         
         # Initialize hardware
         if reset_pin:
@@ -82,7 +82,7 @@ class LoRa:
             bool: True if sent successfully
         """
         if target_addr is None:
-            target_addr = self.satellite_address or 255  # Broadcast if unknown
+            target_addr = self.satellite_address
         
         try:
             message = f"CMD:{command}\r\n".encode('utf-8')
@@ -184,10 +184,6 @@ class LoRa:
             packet = Packet.decode(raw_data, rssi, snr)
             if not packet or not packet.is_valid_checksum():
                 return
-            
-            # Set satellite address from first valid packet
-            if self.satellite_address is None:
-                self.satellite_address = packet.addr_from
             
             message = packet.message.decode('utf-8').strip()
             

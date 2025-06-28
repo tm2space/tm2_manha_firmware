@@ -2,7 +2,7 @@ from machine import Pin, ADC
 import time
 
 MAX_BATTERY_VOLTAGE = (3.3 / 3.3) * 65535
-MIN_BATTERY_VOLTAGE = (0.8 / 3.3) * 65535
+MIN_BATTERY_VOLTAGE = (1.6 / 3.3) * 65535
 
 class BatteryVoltage:
     def __init__(self, adc_pin=26):
