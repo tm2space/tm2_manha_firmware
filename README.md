@@ -1,35 +1,13 @@
 # TM2Space MANHA Firmware
 
-The repository contains the firmware that powers the [MANHA](https://manha.tm2.space) kit from TM2Space. The MANHA OBC (On-Board Computer) is powered by Raspberry Pi Pico and MicroPython framework.
+The repository contains the firmware that powers the [MANHA](https://manha.tm2.space) kit from TM2Space. The MANHA OBC (On-Board Computer) and GS (Ground Station) are powered by Raspberry Pi Pico and MicroPython framework.
 
 ## Overview
 
 MANHA is a satellite development kit featuring comprehensive sensor integration, LoRa communication, and real-time data collection capabilities. The firmware supports two main operational modes:
 
-- **SatKit Mode** (`satkit_main.py`) - Full satellite functionality with sensor monitoring
-- **Ground Station Mode** (`gs_main.py`) - Ground station communication interface
-
-## Features
-
-### Sensor Integration
-- **Accelerometer** (ADXL345) - Motion and orientation sensing
-- **Environmental** (BME680) - Temperature, humidity, pressure, and gas sensing
-- **GPS** (NeoGPS) - Location tracking and timing
-- **UV Sensor** (UVS12SD) - Ultraviolet radiation monitoring
-- **Power Monitor** (INA219) - Current and voltage monitoring
-- **Compass** (QMC5883) - Magnetic field sensing
-- **LED Matrix** (WS2812) - Visual status display
-
-### Communication
-- **LoRa** (RFM9x) - Long-range wireless communication
-- **WebSocket** - Real-time data streaming
-- **HTTP Server** - Web-based control interface
-
-### Data Management
-- Real-time sensor data collection and transmission
-- Packet-based communication protocol
-- Battery monitoring and power management
-- Error handling and system recovery
+- **SatKit** (`satkit_main.py`) - Full satellite functionality with sensor monitoring
+- **Ground Station** (`gs_main.py`) - Ground station communication interface
 
 ## Installation
 
@@ -65,7 +43,7 @@ To finish flashing the groundstation:
 
 ## Project Structure
 
-```
+```txt
 manha/
 ├── satkit/          # MANHA class
 │   ├── manha.py     # Main MANHA class
