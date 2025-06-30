@@ -33,7 +33,7 @@ After following the above steps:
 1. Create a file main.py
 2. Copy contents of `satkit_main.py` to `main.py`
 3. Right click the `qmc5883.py` file and select 'Upload to /'
-4. Go to `manha/config/py` and modify the `LORA_ADDR` constant to match your GS
+4. Go to `manha/config.py` and modify the `LORA_ADDR` constant to match your GS
 
 ### Ground Station
 
@@ -41,7 +41,7 @@ To finish flashing the groundstation:
 
 1. Create a file main.py on the Pico
 2. Copy contents of `gs_main.py` to `main.py`
-3. Go to `manha/config/py` and modify the `LORA_ADDR` constant to match your Manha SatKit
+3. Go to `manha/config.py` and modify the `LORA_ADDR` constant to match your Manha SatKit
 
 ## Project Structure
 
