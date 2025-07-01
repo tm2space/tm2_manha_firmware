@@ -84,7 +84,7 @@ The following JSON fields are transmitted over LoRa from the satkit to the groun
 | `a_x` | float | 0 | X-axis acceleration | 0.039 | m/s² |
 | `a_y` | float | 0 | Y-axis acceleration | 0.039 | m/s² |
 | `a_z` | float | 0 | Z-axis acceleration | 0.039 | m/s² |
-| `uv` | float | -1 | UV intensity measurement (transmitted as {"uv":{"uv": <value>}}) | 1 | UV index |
+| `uv` | float | -1 | UV intensity measurement (transmitted as {"uv":{"uv": <value>}}) | 1 | V |
 | `temp` | float | -1 | Temperature in Celsius | 1 | °C |
 | `pres` | float | -1 | Atmospheric pressure | 1 | Pa |
 | `hum` | float | -1 | Humidity percentage | 1 | % |
