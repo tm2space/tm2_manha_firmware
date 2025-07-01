@@ -86,10 +86,11 @@ The following JSON fields are transmitted over LoRa from the satkit to the groun
 | `a_z` | float | 0 | Z-axis acceleration | 0.039 | m/s² |
 | `uv` | float | -1 | UV intensity measurement (transmitted as {"uv":{"uv": <value>}}) | 1 | V |
 | `temp` | float | -1 | Temperature in Celsius | 1 | °C |
-| `pres` | float | -1 | Atmospheric pressure | 1 | Pa |
+| `pres` | float | -1 | Atmospheric pressure | 1 | hPa |
 | `hum` | float | -1 | Humidity percentage | 1 | % |
 | `ts` | int | current_time | Timestamp in milliseconds | 1 | ms |
 | `lpm` | bool | false | Low power mode status | 1 | boolean |
 | `cs_x` | float | -1 | X-axis Magnetometer Reading | 0.10 | µT |
 | `cs_y` | float | -1 | Y-axis Magnetometer Reading | 0.10 | µT |
 | `cs_z` | float | -1 | Z-axis Magnetometer Reading | 0.10 | µT |
+| `gas`  | float | -1 | Gas Resistance in Ohms | 1 | Ohms |
