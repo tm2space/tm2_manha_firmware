@@ -210,6 +210,9 @@ class LoRa:
     async def _handle_telemetry(self, message: str, packet: Packet):
         """Handle telemetry data (JSON) or simple text responses"""
         try:
+            if packet.addr_to != self.satellite_address:
+                return
+            
             # Check if message starts with '{' to determine if it's JSON
             if not message.startswith('{'):
                 # Not JSON - treat as command response

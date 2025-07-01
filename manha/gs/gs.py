@@ -377,6 +377,9 @@ class ManhaGS:
     async def handle_telemetry_data(self, data: dict, packet):
         """Handle received telemetry data"""
         try:
+            if packet.addr_to != self.lora_address_to:
+                return
+            
             # Store the received data
             async with self.data_lock:
                 self.received_data["telemetry"] = data
@@ -393,6 +396,8 @@ class ManhaGS:
     async def handle_command_response(self, response: str, packet):
         """Handle command response"""
         try:
+            if packet.addr_to != self.lora_address_to:
+                return
             # Store response data
             async with self.data_lock:
                 self.received_data["command_response"] = response
@@ -475,4 +480,5 @@ class ManhaGS:
             asyncio.run(self._run())
         except KeyboardInterrupt:
             self.shutdown()
+
 
