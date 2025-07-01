@@ -69,25 +69,27 @@ qmc5883.py             # QMC5883 compass driver
 
 The following JSON fields are transmitted over LoRa from the satkit to the ground station:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `v_p` | float | -1 | Battery voltage percentage (Battery) |
-| `i` | float | -1 | Current consumption in amperes (Solar Panel) |
-| `s_v` | float | -1 | Shunt voltage measurement (Solar Panel) |
-| `b_v` | float | -1 | Bus voltage measurement (Solar Panel) |
-| `lat` | float | 0.0 | Latitude in decimal degrees |
-| `lng` | float | 0.0 | Longitude in decimal degrees |
-| `alt` | int | 0 | Altitude in meters (from GPS) |
-| `sats` | int | 0 | Number of satellites in use |
-| `a_x` | float | 0 | X-axis acceleration |
-| `a_y` | float | 0 | Y-axis acceleration |
-| `a_z` | float | 0 | Z-axis acceleration |
-| `uv` | float | -1 | UV intensity measurement (transmitted as {"uv":{"uv": <value>}}) |
-| `temp` | float | -1 | Temperature in Celsius |
-| `pres` | float | -1 | Atmospheric pressure |
-| `hum` | float | -1 | Humidity percentage |
-| `ts` | int | current_time | Timestamp in milliseconds |
-| `lpm` | bool | false | Low power mode status |
-| `cs_x` | float | -1 | X-axis Magnetometer Reading |
-| `cs_y` | float | -1 | Y-axis Magnetometer Reading |
-| `cs_z` | float | -1 | Z-axis Magnetometer Reading |
+**NOTE:** <JSON Reading> * Conversion Factor = <Reading in Units>
+
+| Field | Type | Default | Description | Conversion Factor | Units |
+|-------|------|---------|-------------|-------------------|-------|
+| `v_p` | float | -1 | Battery voltage percentage (Battery) | 1 | % |
+| `i` | float | -1 | Current consumption in amperes (Solar Panel) | 1 | A |
+| `s_v` | float | -1 | Shunt voltage measurement (Solar Panel) | 1 | V |
+| `b_v` | float | -1 | Bus voltage measurement (Solar Panel) | 1 | V |
+| `lat` | float | 0.0 | Latitude in decimal degrees | 1 | degrees |
+| `lng` | float | 0.0 | Longitude in decimal degrees | 1 | degrees |
+| `alt` | int | 0 | Altitude in meters (from GPS) | 1 | m |
+| `sats` | int | 0 | Number of satellites in use | 1 | count |
+| `a_x` | float | 0 | X-axis acceleration | 0.039 | m/s² |
+| `a_y` | float | 0 | Y-axis acceleration | 0.039 | m/s² |
+| `a_z` | float | 0 | Z-axis acceleration | 0.039 | m/s² |
+| `uv` | float | -1 | UV intensity measurement (transmitted as {"uv":{"uv": <value>}}) | 1 | UV index |
+| `temp` | float | -1 | Temperature in Celsius | 1 | °C |
+| `pres` | float | -1 | Atmospheric pressure | 1 | Pa |
+| `hum` | float | -1 | Humidity percentage | 1 | % |
+| `ts` | int | current_time | Timestamp in milliseconds | 1 | ms |
+| `lpm` | bool | false | Low power mode status | 1 | boolean |
+| `cs_x` | float | -1 | X-axis Magnetometer Reading | 0.10 | µT |
+| `cs_y` | float | -1 | Y-axis Magnetometer Reading | 0.10 | µT |
+| `cs_z` | float | -1 | Z-axis Magnetometer Reading | 0.10 | µT |
