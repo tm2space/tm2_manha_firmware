@@ -69,7 +69,7 @@ qmc5883.py             # QMC5883 compass driver
 
 The following JSON fields are transmitted over LoRa from the satkit to the ground station:
 
-**NOTE:** <JSON Reading> * Conversion Factor = <Reading in Units>
+**NOTE:** (JSON Reading) x (Conversion Factor) = (Reading in Units)
 
 | Field | Type | Default | Description | Conversion Factor | Units |
 |-------|------|---------|-------------|-------------------|-------|
