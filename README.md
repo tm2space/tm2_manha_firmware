@@ -75,7 +75,7 @@ The following JSON fields are transmitted over LoRa from the satkit to the groun
 |-------|------|---------|-------------|-------------------|-------|
 | `v_p` | float | -1 | Battery voltage percentage (Battery) | 1 | % |
 | `i` | float | -1 | Current consumption in amperes (Solar Panel) | 1 | mA |
-| `s_v` | float | -1 | Shunt voltage measurement (Solar Panel) | 1 | uV |
+| `s_v` | float | -1 | Shunt voltage measurement (Solar Panel) | 1 | mV |
 | `b_v` | float | -1 | Bus voltage measurement (Solar Panel) | 1 | V |
 | `lat` | float | 0.0 | Latitude in decimal degrees | 1 | degrees |
 | `lng` | float | 0.0 | Longitude in decimal degrees | 1 | degrees |
