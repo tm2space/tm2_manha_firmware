@@ -5,23 +5,30 @@ from micropython import const
 
 import time
 
+
 class LEDMatrix:
-    
     _DEFAULT_WIDTH = const(8)
     _DEFAULT_HEIGHT = const(8)
     _DEFAULT_COLOR = PixelColors.CLEAR
     _DEFAULT_DO = const(3)
-    
-    def __init__(self, width: int = _DEFAULT_WIDTH, height: int = _DEFAULT_HEIGHT, do: int = _DEFAULT_DO) -> None:
-        """Initialize the LED matrix with specified width, height, and brightness.
+
+    def __init__(
+        self,
+        width: int = _DEFAULT_WIDTH,
+        height: int = _DEFAULT_HEIGHT,
+        do: int = _DEFAULT_DO,
+    ) -> None:
+        """Initialize the LED matrix with specified dimensions and data-out pin.
 
         Args:
             width (int): Width of the LED matrix.
             height (int): Height of the LED matrix.
-            brightness (int): Brightness level of the LEDs (0-255).
+            do (int): GPIO pin number for the WS2812 data output.
         """
-        self._matrix = WS2812Matrix(width=width, height=height, do=do, initial_color=self._DEFAULT_COLOR)
-        
+        self._matrix = WS2812Matrix(
+            width=width, height=height, do=do, initial_color=self._DEFAULT_COLOR
+        )
+
     def set_pixel(self, x: int, y: int, color: tuple) -> None:
         """Set the color of a specific pixel in the matrix.
 
@@ -31,7 +38,7 @@ class LEDMatrix:
             color (tuple): RGB color value as a tuple.
         """
         self._matrix.setPixel(x, y, color)
-        
+
     def get_pixel(self, x: int, y: int) -> tuple:
         """Get the color of a specific pixel in the matrix.
 
@@ -43,7 +50,7 @@ class LEDMatrix:
             tuple: RGB color value as a tuple.
         """
         return self._matrix.get(x, y)
-        
+
     def fill(self, color: tuple) -> None:
         """Fill the entire matrix with a specific color.
 
@@ -51,17 +58,18 @@ class LEDMatrix:
             color (tuple): RGB color value as a tuple.
         """
         self._matrix.fill(color)
-        
+
     def clear(self) -> None:
         """Clear the matrix by setting all pixels to black (off)."""
         self._matrix.clear()
-        
+
     def blink(self, color: tuple, delay: int, off_color: tuple = None) -> None:
         """Blink the entire matrix with a specific color once.
 
         Args:
             color (tuple): RGB color value as a tuple.
             delay (int): Delay in milliseconds between blinks.
+            off_color (tuple, optional): Color to show in the off phase. Defaults to None (matrix cleared).
         """
         self.fill(color)
         self._matrix.write()

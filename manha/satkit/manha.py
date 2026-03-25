@@ -10,7 +10,7 @@ from collections import namedtuple
 
 from manha.utils import calculate_checksum
 
-# Import all needed modules upfront
+# Import core modules
 from manha.satkit.peripherals import LEDMatrix, PixelColors
 from manha.internals.drivers import (
     GPSParser,
@@ -34,13 +34,12 @@ class MANHA:
         return i2c.m_i2c
 
     def __init__(self, lora_address_to=LORA_ADDR, lora_address_self=LORA_ADDR):
-        """Initialize the MANHA class with aggressive memory management
+        """Initialize the MANHA satellite control system
 
         Args:
             lora_address_to (int): LoRa address to send data to
             lora_address_self (int): LoRa address for this device
         """
-        # Force aggressive garbage collection at startup
         gc.collect()
         startup_memory = gc.mem_free()
         # print(f"MANHA init - Free memory: {startup_memory}")
@@ -53,22 +52,18 @@ class MANHA:
         self.lora_address_to = lora_address_to
         self.lora_address_self = lora_address_self
 
-        # Initialize minimal sensor lists
         self.essential_sensors = []
         self.non_essential_sensors = []
         self.low_power_mode = False
         self.power_threshold = LOW_POWER_THRESHOLD
 
-        # Minimal command system
         self.commands = {}
 
-        # Memory check before creating locks
         gc.collect()
         if gc.mem_free() < 50000:
             # print("ERROR: Insufficient memory for initialization")
             raise MemoryError("Cannot initialize - insufficient memory")
 
-        # Create minimal telemetry system
         self.telemetry_lock = asyncio.Lock()
         self.telemetry_data = {}
 
@@ -78,23 +73,18 @@ class MANHA:
         self._packet_count = 0
         self._tlm_generator = None
 
-        # Pre-allocated buffers for memory optimization
-        self._temp_dict = {}  # Reusable dict for telemetry
+        self._temp_dict = {}  # Reusable dict for telemetry preparation
 
-        # Initialize hardware with memory checks
         gc.collect()
         self.led = machine.Pin("LED", machine.Pin.OUT)
 
-        # Initialize I2C
         i2c.init_i2c()
         gc.collect()
 
-        # Initialize LED Matrix
         self.led_matrix = LEDMatrix(8, 8, 3)
         self.led_matrix.fill(PixelColors.WHITE)
         gc.collect()
 
-        # Setup SPI for LoRa with memory check
         if gc.mem_free() < 40000:
             # print("WARNING: Low memory before LoRa init")
             gc.collect()
@@ -111,7 +101,6 @@ class MANHA:
         cs_pin = machine.Pin(LORA_SPI_CS, machine.Pin.OUT)
         gc.collect()
 
-        # Initialize LoRa with new driver
         self.lora = LoRa(
             device_id=self.lora_address_self,
             cs_pin=cs_pin,
@@ -293,11 +282,11 @@ class MANHA:
         # print(f"Sensor setup complete - Free memory: {final_memory}")
 
     def add_sensor(self, sensor, essential: bool = False):
-        """Add a sensor with memory check
+        """Add a sensor to the telemetry system
 
         Args:
             sensor: Function that returns sensor data dict OR object with read() method
-            essential (bool): True if this is an essential sensor (GPS or PowerMon)
+            essential (bool): If True, sensor is always read (even in low-power mode)
         """
         # Memory check before adding sensor
         if gc.mem_free() < 25000:
@@ -312,14 +301,14 @@ class MANHA:
             return len(self.non_essential_sensors) - 1
 
     async def blink_led_matrix(self, color):
-        """Only blink LED matrix if not in low power mode"""
+        """Briefly flash the LED matrix with a color. Suppressed in low-power mode."""
         if not self.low_power_mode:
             self.led_matrix.fill(color)
             await asyncio.sleep(0.05)
             self.led_matrix.clear()
 
     async def _listen_for_commands(self, listen_time_ms: int):
-        """Listen for incoming commands for specified time - using bytes comparisons"""
+        """Listen for incoming LoRa commands for a given duration"""
         self.lora._modem.set_mode_rx()
         start_time = time.ticks_ms()
 
@@ -345,7 +334,7 @@ class MANHA:
             await asyncio.sleep_ms(10)
 
     async def _process_command_bytes(self, command_bytes: bytes, sender_addr: int):
-        """Process command using bytes - set flag for generator to handle response"""
+        """Process a received command and queue a response for the next telemetry cycle"""
         try:
             # Visual indication of command reception
             self.led_matrix.fill(PixelColors.BLUE)
@@ -465,10 +454,10 @@ class MANHA:
         await self.blink_led_matrix(PixelColors.MAGENTA)
 
     async def read_sensors_task(self, interval: int = 1):
-        """Task to read sensors sequentially with memory optimization
+        """Task to periodically read all sensors
 
         Args:
-            interval (int): Base time in seconds between sensor readings
+            interval (int): Time in milliseconds between sensor readings
         """
         self._sensor_read_interval = interval
 
@@ -538,7 +527,7 @@ class MANHA:
                 await asyncio.sleep_ms(2000)
 
     def _prepare_telemetry_generator(self, tlm_data_copy):
-        """Generator for telemetry data <= 200 bytes"""
+        """Generator that yields telemetry as one or more chunks of <= 200 bytes"""
         try:
             # Reuse temp dict
             self._temp_dict.clear()
@@ -578,7 +567,7 @@ class MANHA:
                 self._temp_dict.clear()
 
     async def _prepare_telemetry_async(self):
-        """Async wrapper for telemetry preparation"""
+        """Prepare telemetry payload, including any pending command response"""
         # Check command response
         if self.command_flag and self.command_response:
             try:
@@ -616,18 +605,16 @@ class MANHA:
             return b'{"tlm":"err"}'
 
     async def lora_tlm_task(self, interval=3):
-        """Memory-optimized LoRa telemetry task using generator function"""
+        """Async task that transmits telemetry over LoRa and listens for commands"""
         last_telemetry_time = time.ticks_ms()
 
         while True:
             try:
-                # Aggressive memory management
                 gc.collect()
 
                 current_time = time.ticks_ms()
                 time_since_last_tlm = time.ticks_diff(current_time, last_telemetry_time)
 
-                # Check if it's time to send telemetry or we have a command to send
                 if (
                     time_since_last_tlm >= self._sensor_read_interval
                     or self.command_flag
@@ -635,28 +622,22 @@ class MANHA:
                     target_addr = self.lora_address_to
                     ack_received = False
 
-                    # Get telemetry data using async generator
                     tlm_bytes = await self._prepare_telemetry_async()
 
                     if tlm_bytes and len(tlm_bytes) > 2:  # More than just '{}'
                         try:
-                            # Create packet with memory check
                             from manha.internals.comms.packet import Packet
 
                             packet = Packet(
                                 target_addr, self.lora_address_self, tlm_bytes
                             )
 
-                            # Send packet using direct modem access
                             self.lora._modem.set_mode_idle()
                             if self.lora._modem.send(packet.encode()):
-                                # Wait for TX_DONE
                                 if await self._wait_tx_done():
-                                    # Wait for ACK
                                     if await self._wait_for_simple_ack(300):
                                         ack_received = True
 
-                            # Clear packet reference immediately
                             packet = None
 
                         except MemoryError:
@@ -671,11 +652,9 @@ class MANHA:
                     else:
                         await self.blink_led_matrix(PixelColors.MAGENTA)
 
-                    # Clear variables and collect garbage after transmission
                     tlm_bytes = None
                     gc.collect()
 
-                # Listen for commands
                 await self._listen_for_commands(100)
 
                 await asyncio.sleep_ms(50)
@@ -720,7 +699,6 @@ class MANHA:
 
         return False
 
-    # Add proper cleanup method for graceful shutdown
     async def _shutdown(self):
         """Clean up resources before shutdown"""
         try:
@@ -732,16 +710,14 @@ class MANHA:
             print(f"Error during shutdown: {e}")
 
     def run(self):
-        # Aggressive memory cleanup before starting
+        """Start the sensor and telemetry tasks"""
         gc.collect()
         # initial_memory = gc.mem_free()
         # print(f"Starting MANHA - Free memory: {initial_memory}")
 
-        # Check if we have enough memory to start
         # if initial_memory < 40000:
         #     print("WARNING: Low memory at startup - expect issues")
 
-        # Create tasks with staggered timing to reduce concurrent memory usage
         sensor_task = asyncio.create_task(self.read_sensors_task(TELEMETRY_INTERVAL_MS))
         lora_task = asyncio.create_task(self.lora_tlm_task(TELEMETRY_INTERVAL_MS))
 

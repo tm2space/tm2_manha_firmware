@@ -32,7 +32,7 @@ class GPS(ManhaSensor):
         """Get location values from the GPS
 
         Returns:
-            dict: dict of {lat,lng,alt,satcnt,hdop}
+            dict: dict of {lat, lng, alt, sats, hdop}
         """
         if not self._update_values():
             return {"lat": 0.0, "lng": 0.0, "alt": -1, "sats": -1, "hdop": -1}
