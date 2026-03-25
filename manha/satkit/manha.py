@@ -451,10 +451,10 @@ class MANHA:
     async def enter_low_power_mode(self):
         """Enter Low Power Mode"""
         print("ENTERING LOW POWER MODE")
-        self.low_power_mode = True
         self._sensor_read_interval = LOW_POWER_TELEMETRY_INTERVAL_MS
 
         await self.blink_led_matrix(PixelColors.YELLOW)
+        self.low_power_mode = True
 
     async def exit_low_power_mode(self):
         """Exit Low Power Mode"""
