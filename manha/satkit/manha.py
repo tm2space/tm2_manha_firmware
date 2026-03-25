@@ -57,7 +57,7 @@ class MANHA:
         self.essential_sensors = []
         self.non_essential_sensors = []
         self.low_power_mode = False
-        self.power_threshold = 50
+        self.power_threshold = LOW_POWER_THRESHOLD
 
         # Minimal command system
         self.commands = {}
@@ -315,7 +315,7 @@ class MANHA:
         """Only blink LED matrix if not in low power mode"""
         if not self.low_power_mode:
             self.led_matrix.fill(color)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.05)
             self.led_matrix.clear()
 
     async def _listen_for_commands(self, listen_time_ms: int):
@@ -451,19 +451,18 @@ class MANHA:
     async def enter_low_power_mode(self):
         """Enter Low Power Mode"""
         print("ENTERING LOW POWER MODE")
-        # Enter low power mode (no WiFi/web server to shut down)
         self.low_power_mode = True
+        self._sensor_read_interval = LOW_POWER_TELEMETRY_INTERVAL_MS
 
-        # Final LED matrix notification before shutdown
         await self.blink_led_matrix(PixelColors.YELLOW)
 
     async def exit_low_power_mode(self):
         """Exit Low Power Mode"""
         print("EXITING LOW POWER MODE")
         self.low_power_mode = False
+        self._sensor_read_interval = TELEMETRY_INTERVAL_MS
 
-        # Re-enable LED matrix
-        await self.blink_led_matrix(PixelColors.MAGENTA)  # Indicate normal mode
+        await self.blink_led_matrix(PixelColors.MAGENTA)
 
     async def read_sensors_task(self, interval: int = 1):
         """Task to read sensors sequentially with memory optimization
@@ -477,10 +476,7 @@ class MANHA:
             try:
                 gc.collect()
 
-                if self.low_power_mode:
-                    await asyncio.sleep(10)
-                else:
-                    await asyncio.sleep(self._sensor_read_interval)
+                await asyncio.sleep_ms(self._sensor_read_interval)
 
                 temp_telemetry = {}
 
@@ -632,7 +628,10 @@ class MANHA:
                 time_since_last_tlm = time.ticks_diff(current_time, last_telemetry_time)
 
                 # Check if it's time to send telemetry or we have a command to send
-                if time_since_last_tlm >= (interval * 1000) or self.command_flag:
+                if (
+                    time_since_last_tlm >= self._sensor_read_interval
+                    or self.command_flag
+                ):
                     target_addr = self.lora_address_to
                     ack_received = False
 
@@ -654,7 +653,7 @@ class MANHA:
                                 # Wait for TX_DONE
                                 if await self._wait_tx_done():
                                     # Wait for ACK
-                                    if await self._wait_for_simple_ack(2000):
+                                    if await self._wait_for_simple_ack(300):
                                         ack_received = True
 
                             # Clear packet reference immediately
@@ -664,8 +663,8 @@ class MANHA:
                             # print("LoRa: packet creation failed - memory")
                             await self.blink_led_matrix(PixelColors.RED)
 
+                    last_telemetry_time = current_time
                     if ack_received:
-                        last_telemetry_time = current_time
                         self._packet_count += 1
                         if not self.low_power_mode:
                             await self.blink_led_matrix(PixelColors.GREEN)
@@ -677,9 +676,9 @@ class MANHA:
                     gc.collect()
 
                 # Listen for commands
-                await self._listen_for_commands(300)
+                await self._listen_for_commands(100)
 
-                await asyncio.sleep_ms(500)
+                await asyncio.sleep_ms(50)
 
             except MemoryError:
                 # print("LoRa task: memory allocation failed")
@@ -689,7 +688,7 @@ class MANHA:
                 print("LoRa task: general error")
                 await asyncio.sleep_ms(1500)
 
-    async def _wait_tx_done(self, timeout_ms=2000):
+    async def _wait_tx_done(self, timeout_ms=500):
         """Wait for TX_DONE flag"""
         start_time = time.ticks_ms()
         while True:
@@ -743,10 +742,8 @@ class MANHA:
         #     print("WARNING: Low memory at startup - expect issues")
 
         # Create tasks with staggered timing to reduce concurrent memory usage
-        sensor_task = asyncio.create_task(
-            self.read_sensors_task(3)
-        )  # Slower sensor reading
-        lora_task = asyncio.create_task(self.lora_tlm_task(5))  # Slower telemetry rate
+        sensor_task = asyncio.create_task(self.read_sensors_task(TELEMETRY_INTERVAL_MS))
+        lora_task = asyncio.create_task(self.lora_tlm_task(TELEMETRY_INTERVAL_MS))
 
         try:
             asyncio.run(asyncio.gather(sensor_task, lora_task))

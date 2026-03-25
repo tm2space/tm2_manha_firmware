@@ -1,6 +1,9 @@
 from micropython import const
 
 LORA_ADDR = const(11)
+LOW_POWER_THRESHOLD = const(35)  # Battery % below which Low-Power Mode activates
+TELEMETRY_INTERVAL_MS = const(1000)  # seconds between TLM packets
+LOW_POWER_TELEMETRY_INTERVAL_MS = const(5000)  #  seconds between TLML in Low-Power Mode
 
 COMMANDS = {
     "help": "Display available commands",
