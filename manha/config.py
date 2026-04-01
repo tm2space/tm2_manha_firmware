@@ -5,6 +5,9 @@ LOW_POWER_THRESHOLD = const(35)  # Battery % below which Low-Power Mode activate
 TELEMETRY_INTERVAL_MS = const(1000)  # ms between TLM packets
 LOW_POWER_TELEMETRY_INTERVAL_MS = const(5000)  # ms between TLM in Low-Power Mode
 
+# Set True for legacy JSON packetization (deprecated).
+USE_LEGACY_PACKETIZATION = False
+
 COMMANDS = {
     "help": "Display available commands",
     "ping": "Send a ping to the satellite",

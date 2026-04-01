@@ -74,6 +74,7 @@ class MANHA:
         self._tlm_generator = None
 
         self._temp_dict = {}  # Reusable dict for telemetry preparation
+        self._seq_number = 0  # Packet sequence number (0-255)
 
         gc.collect()
         self.led = machine.Pin("LED", machine.Pin.OUT)
@@ -309,26 +310,30 @@ class MANHA:
 
     async def _listen_for_commands(self, listen_time_ms: int):
         """Listen for incoming LoRa commands for a given duration"""
+        from manha.internals.comms.packet import Packet, MSG_CMD
+
         self.lora._modem.set_mode_rx()
         start_time = time.ticks_ms()
 
         while time.ticks_diff(time.ticks_ms(), start_time) < listen_time_ms:
-            # Check for RX_DONE
             if self.lora._modem._is_flag_set(0x40):  # RX_DONE
                 recv_result = self.lora._modem.recv_data()
                 if recv_result:
                     raw_data, rssi, snr = recv_result
-                    from manha.internals.comms.packet import Packet
-
                     packet = Packet.decode(raw_data, rssi, snr)
                     if packet and packet.is_valid_checksum():
-                        # Use bytes comparison instead of string
-                        if packet.message.startswith(b"CMD:"):
-                            command_bytes = packet.message[4:].strip()
-                            await self._process_command_bytes(
-                                command_bytes, packet.addr_from
-                            )
-                        # Return early if we received something
+                        if USE_LEGACY_PACKETIZATION:
+                            if packet.message.startswith(b"CMD:"):
+                                command_bytes = packet.message[4:].strip()
+                                await self._process_command_bytes(
+                                    command_bytes, packet.addr_from
+                                )
+                        else:
+                            if packet.msg_type == MSG_CMD:
+                                command_bytes = packet.message.strip()
+                                await self._process_command_bytes(
+                                    command_bytes, packet.addr_from
+                                )
                         return
 
             await asyncio.sleep_ms(10)
@@ -417,10 +422,16 @@ class MANHA:
     async def _send_response_direct(self, response: str, target_addr: int):
         """Send command response using direct modem access"""
         try:
-            message = f"CMD:{response}\r\n".encode("utf-8")
-            from manha.internals.comms.packet import Packet
+            from manha.internals.comms.packet import Packet, MSG_CMD_RESP
 
-            packet = Packet(target_addr, self.lora_address_self, message)
+            if USE_LEGACY_PACKETIZATION:
+                message = f"CMD:{response}\r\n".encode("utf-8")
+                packet = Packet(target_addr, self.lora_address_self, message)
+            else:
+                message = response.encode("utf-8")
+                packet = Packet(
+                    target_addr, self.lora_address_self, message, msg_type=MSG_CMD_RESP
+                )
 
             self.lora._modem.set_mode_idle()
             if self.lora._modem.send(packet.encode()):
@@ -567,42 +578,71 @@ class MANHA:
                 self._temp_dict.clear()
 
     async def _prepare_telemetry_async(self):
-        """Prepare telemetry payload, including any pending command response"""
+        """Prepare telemetry payload, including any pending command response
+
+        Returns:
+            tuple: (bytes, msg_type) where msg_type is used for binary packet header
+        """
+        from manha.internals.comms.packet import MSG_TLM, MSG_CMD_RESP
+
         # Check command response
         if self.command_flag and self.command_response:
             try:
                 response_bytes = self.command_response.encode("utf-8")
                 self.command_flag = False
                 self.command_response = None
-                return response_bytes
+                return response_bytes, MSG_CMD_RESP
             except MemoryError:
                 self.command_flag = False
                 self.command_response = None
-                return b'{"cmd":"mem_err"}'
+                return b'{"cmd":"mem_err"}', MSG_CMD_RESP
 
         # Get telemetry
         try:
             async with self.telemetry_lock:
                 if not self.telemetry_data:
-                    return b"{}"
+                    if USE_LEGACY_PACKETIZATION:
+                        return b"{}", MSG_TLM
+                    return None, MSG_TLM
                 tlm_data_copy = self.telemetry_data.copy()
 
-            if not hasattr(self, "_tlm_generator") or self._tlm_generator is None:
-                self._tlm_generator = self._prepare_telemetry_generator(tlm_data_copy)
-
-            try:
-                return next(self._tlm_generator)
-            except StopIteration:
-                self._tlm_generator = self._prepare_telemetry_generator(tlm_data_copy)
+            if USE_LEGACY_PACKETIZATION:
+                # Legacy JSON path
+                if not hasattr(self, "_tlm_generator") or self._tlm_generator is None:
+                    self._tlm_generator = self._prepare_telemetry_generator(
+                        tlm_data_copy
+                    )
                 try:
-                    return next(self._tlm_generator)
+                    return next(self._tlm_generator), MSG_TLM
                 except StopIteration:
-                    return b"{}"
+                    self._tlm_generator = self._prepare_telemetry_generator(
+                        tlm_data_copy
+                    )
+                    try:
+                        return next(self._tlm_generator), MSG_TLM
+                    except StopIteration:
+                        return b"{}", MSG_TLM
+            else:
+                # Binary protocol path
+                from manha.internals.comms.binary_tlm import encode_tlm
+
+                tlm_bytes = encode_tlm(
+                    tlm_data_copy,
+                    self._seq_number,
+                    self.low_power_mode,
+                    time.ticks_ms(),
+                )
+                self._seq_number = (self._seq_number + 1) & 0xFF
+                return tlm_bytes, MSG_TLM
 
         except MemoryError:
-            return b'{"tlm":"mem_err"}'
+            if USE_LEGACY_PACKETIZATION:
+                return b'{"tlm":"mem_err"}', MSG_TLM
+            return None, MSG_TLM
         except Exception:
-            return b'{"tlm":"err"}'
+            if USE_LEGACY_PACKETIZATION:
+                return b'{"tlm":"err"}', MSG_TLM
+            return None, MSG_TLM
 
     async def lora_tlm_task(self, interval=3):
         """Async task that transmits telemetry over LoRa and listens for commands"""
@@ -622,14 +662,17 @@ class MANHA:
                     target_addr = self.lora_address_to
                     ack_received = False
 
-                    tlm_bytes = await self._prepare_telemetry_async()
+                    tlm_bytes, msg_type = await self._prepare_telemetry_async()
 
-                    if tlm_bytes and len(tlm_bytes) > 2:  # More than just '{}'
+                    if tlm_bytes and len(tlm_bytes) > 2:
                         try:
                             from manha.internals.comms.packet import Packet
 
                             packet = Packet(
-                                target_addr, self.lora_address_self, tlm_bytes
+                                target_addr,
+                                self.lora_address_self,
+                                tlm_bytes,
+                                msg_type=msg_type,
                             )
 
                             self.lora._modem.set_mode_idle()
@@ -641,7 +684,6 @@ class MANHA:
                             packet = None
 
                         except MemoryError:
-                            # print("LoRa: packet creation failed - memory")
                             await self.blink_led_matrix(PixelColors.RED)
 
                     last_telemetry_time = current_time
@@ -680,7 +722,9 @@ class MANHA:
             await asyncio.sleep_ms(10)
 
     async def _wait_for_simple_ack(self, timeout_ms: int) -> bool:
-        """Wait for ACK with minimal memory usage"""
+        """Wait for ACK packet"""
+        from manha.internals.comms.packet import MSG_ACK
+
         self.lora._modem.set_mode_rx()
         start_time = time.ticks_ms()
 
@@ -689,12 +733,16 @@ class MANHA:
                 recv_result = self.lora._modem.recv_data()
                 if recv_result:
                     raw_data, _, _ = recv_result
-                    # Quick check for ACK without full packet decode
-                    if len(raw_data) >= 6 and raw_data[3:6] == b"ACK":
-                        return True
-                    # CMD also counts as ACK
-                    elif len(raw_data) >= 6 and raw_data[3:6] == b"CMD":
-                        return True
+                    if USE_LEGACY_PACKETIZATION:
+                        # Legacy: check for ACK/CMD text at byte offset 3
+                        if len(raw_data) >= 6 and raw_data[3:6] == b"ACK":
+                            return True
+                        elif len(raw_data) >= 6 and raw_data[3:6] == b"CMD":
+                            return True
+                    else:
+                        # Binary: check msg_type byte at offset 2
+                        if len(raw_data) >= 4 and raw_data[2] == MSG_ACK:
+                            return True
             await asyncio.sleep_ms(20)
 
         return False
