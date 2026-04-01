@@ -1,7 +1,7 @@
 """
 Binary telemetry encoder/decoder for MANHA LoRa protocol
 
-Format: '<IBBffffffffBhhhffff' (57 bytes)
+Format: '<IBBfffffffBhhhffff' (57 bytes)
 
 Fields:
     ts      uint32    Monotonic timestamp (ms)
@@ -26,7 +26,7 @@ Fields:
 
 import struct
 
-TLM_FORMAT = "<IBBffffffffBhhhffff"
+TLM_FORMAT = "<IBBfffffffBhhhffff"
 TLM_SIZE = struct.calcsize(TLM_FORMAT)  # 57 bytes
 
 TLM_FIELDS = (

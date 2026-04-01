@@ -58,6 +58,7 @@ class MANHA:
         self.power_threshold = LOW_POWER_THRESHOLD
 
         self.commands = {}
+        self._setup_default_commands()
 
         gc.collect()
         if gc.mem_free() < 50000:
@@ -117,32 +118,74 @@ class MANHA:
         # final_memory = gc.mem_free()
         # print(f"MANHA init complete - Free memory: {final_memory}")
 
-    async def cmd_lpm(self, command, from_address):
+    def _setup_default_commands(self):
+        """Register built-in command handlers"""
+        self.add_command("PING", self._cmd_ping)
+        self.add_command("RESET", self._cmd_reset)
+        self.add_command("TXPOW", self._cmd_txpow)
+        self.add_command("LPM", self._cmd_lpm)
+        self.add_command("HDRM", self._cmd_hdrm)
+
+    def _cmd_ping(self, command, sender_addr):
+        """Handle PING command"""
+        return "PONG"
+
+    def _cmd_reset(self, command, sender_addr):
+        """Handle RESET command - schedule device reset"""
+        asyncio.create_task(self._delayed_reset())
+        return "RESET_ACK"
+
+    def _cmd_txpow(self, command, sender_addr):
+        """Handle TXPOW=<value> command - set LoRa TX power"""
+        try:
+            power_str = command.split("=")[1]
+            power = int(power_str)
+            if 5 <= power <= 23:
+                self.lora.set_tx_power(power)
+                return f"TX power set to {power}dBm"
+            else:
+                return "TX power must be between 5 and 23dBm"
+        except (IndexError, ValueError) as e:
+            return f"Command format error: {e}"
+
+    async def _cmd_lpm(self, command, sender_addr):
         """Handle LPM=<0/1> command - force low power mode"""
         try:
-            # Extract LPM value from LPM=<0/1> format
             lpm_str = command.split("=")[1]
             lpm_value = int(lpm_str)
-
             if lpm_value == 1:
-                # Force enter low power mode
                 if not self.low_power_mode:
                     await self.enter_low_power_mode()
-                response = "Low power mode enabled"
+                return "Low power mode enabled"
             elif lpm_value == 0:
-                # Force exit low power mode
                 if self.low_power_mode:
                     await self.exit_low_power_mode()
-                response = "Low power mode disabled"
+                return "Low power mode disabled"
             else:
-                response = "LPM value must be 0 or 1"
+                return "LPM value must be 0 or 1"
         except (IndexError, ValueError):
-            response = "Invalid LPM command format. Use LPM=<0/1>"
+            return "Invalid LPM command format. Use LPM=<0/1>"
 
-        # Send response
-        response_data = {"type": "LPM", "message": response}
-        await self._send_response_direct(json.dumps(response_data), from_address)
-        return True
+    def _cmd_hdrm(self, command, sender_addr):
+        """Handle HDRM=<0/1> command - hold/release mechanism"""
+        try:
+            if not ENABLE_HDRM:
+                return "HDRM not enabled"
+            hdrm_val = int(command.split("=")[1])
+            if not hasattr(self, "_hdrm"):
+                from manha.satkit.peripherals import MHDRM
+
+                self._hdrm = MHDRM()
+            if hdrm_val == 1:
+                self._hdrm.release()
+                return "HDRM released"
+            elif hdrm_val == 0:
+                self._hdrm.hold()
+                return "HDRM held"
+            else:
+                return "HDRM value must be 0 or 1"
+        except (IndexError, ValueError) as e:
+            return f"Command format error: {e}"
 
     def add_command(self, command_name: str, callback) -> None:
         """Add a new command to the command registry.
@@ -151,7 +194,8 @@ class MANHA:
             command_name: The name of the command (string)
             callback: The function to call when the command is received
         """
-        self.commands[command_name] = callback
+        is_async = str(type(callback)) == "<class 'generator'>"
+        self.commands[command_name] = (callback, is_async)
 
     def remove_command(self, command_name: str) -> None:
         """Remove a command from the command registry.
@@ -241,7 +285,7 @@ class MANHA:
                         from manha.satkit.peripherals import UVSensor
 
                         self._uv_sensor = UVSensor()
-                    return {"uv": self._uv_sensor.read()}
+                    return self._uv_sensor.read()
                 except:
                     return {"uv": -1}
 
@@ -369,82 +413,22 @@ class MANHA:
             # Convert bytes to string for processing
             command = command_bytes.decode("utf-8")
 
-            # Process standard commands first
-            if command == "PING":
-                self.command_response = "PONG"
-                self.command_flag = True
-            elif command == "RESET":
-                self.command_response = "RESET_ACK"
-                self.command_flag = True
-                # Schedule reset after sending response
-                asyncio.create_task(self._delayed_reset())
+            # Look up command handler from registry
+            cmd_key = command.split("=")[0] if "=" in command else command
+
+            if cmd_key in self.commands:
+                handler, is_async = self.commands[cmd_key]
+                result = handler(command, sender_addr)
+                response = await result if is_async else result
             else:
-                # Handle custom commands and set response
-                response = await self._handle_custom_command_with_response(
-                    command, sender_addr
-                )
-                if response:
-                    self.command_response = response
-                    self.command_flag = True
+                response = f"Unknown command: {command}"
+
+            if response:
+                self.command_response = response
+                self.command_flag = True
 
         except Exception as e:
             print(f"Command processing error: {e}")
-
-    async def _handle_custom_command_with_response(
-        self, command: str, sender_addr: int
-    ) -> str:
-        """Handle custom commands and return response string"""
-        try:
-            if command.startswith("TXPOW="):
-                # Extract power value from TXPOW=<v> format
-                power_str = command.split("=")[1]
-                power = int(power_str)
-
-                if 5 <= power <= 23:
-                    self.lora.set_tx_power(power)
-                    return f"TX power set to {power}dBm"
-                else:
-                    return "TX power must be between 5 and 23dBm"
-
-            elif command.startswith("LPM="):
-                # Extract LPM value from LPM=<0/1> format
-                lpm_str = command.split("=")[1]
-                lmp_value = int(lpm_str)
-
-                if lmp_value == 1:
-                    if not self.low_power_mode:
-                        await self.enter_low_power_mode()
-                    return "Low power mode enabled"
-                elif lmp_value == 0:
-                    if self.low_power_mode:
-                        await self.exit_low_power_mode()
-                    return "Low power mode disabled"
-                else:
-                    return "LPM value must be 0 or 1"
-
-            elif command.startswith("HDRM="):
-                if not ENABLE_HDRM:
-                    return "HDRM not enabled"
-                hdrm_val = int(command.split("=")[1])
-                if not hasattr(self, "_hdrm"):
-                    from manha.satkit.peripherals import MHDRM
-
-                    self._hdrm = MHDRM()
-                if hdrm_val == 1:
-                    self._hdrm.release()
-                    return "HDRM released"
-                elif hdrm_val == 0:
-                    self._hdrm.hold()
-                    return "HDRM held"
-                else:
-                    return "HDRM value must be 0 or 1"
-            else:
-                return f"Unknown command: {command}"
-
-        except (IndexError, ValueError) as e:
-            return f"Command format error: {e}"
-        except Exception as e:
-            return f"Command error: {e}"
 
     async def _delayed_reset(self):
         """Reset system after small delay"""
@@ -614,6 +598,22 @@ class MANHA:
             if hasattr(self, "_temp_dict"):
                 self._temp_dict.clear()
 
+    def _log_tx(self, data):
+        """Log transmitted packet to console and/or file if enabled."""
+        msg = (
+            ",".join(str(v) for v in data.values())
+            if isinstance(data, dict)
+            else str(data)
+        )
+        if SATKIT_LOG_TELEMETRY_TO_CONSOLE:
+            print(msg)
+        if SATKIT_LOG_TELEMETRY_TO_FILE:
+            try:
+                with open(SATKIT_LOG_TELEMETRY_TO_FILE, "a") as f:
+                    f.write(msg + "\n")
+            except Exception:
+                pass
+
     async def _prepare_telemetry_async(self):
         """Prepare telemetry payload, including any pending command response
 
@@ -626,6 +626,7 @@ class MANHA:
         if self.command_flag and self.command_response:
             try:
                 response_bytes = self.command_response.encode("utf-8")
+                self._log_tx(self.command_response)
                 self.command_flag = False
                 self.command_response = None
                 return response_bytes, MSG_CMD_RESP
@@ -642,6 +643,8 @@ class MANHA:
                         return b"{}", MSG_TLM
                     return None, MSG_TLM
                 tlm_data_copy = self.telemetry_data.copy()
+
+            self._log_tx(tlm_data_copy)
 
             if USE_LEGACY_PACKETIZATION:
                 # Legacy JSON path
@@ -676,7 +679,8 @@ class MANHA:
             if USE_LEGACY_PACKETIZATION:
                 return b'{"tlm":"mem_err"}', MSG_TLM
             return None, MSG_TLM
-        except Exception:
+        except Exception as e:
+            print(f"TLM prepare error: {e}")
             if USE_LEGACY_PACKETIZATION:
                 return b'{"tlm":"err"}', MSG_TLM
             return None, MSG_TLM

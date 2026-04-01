@@ -18,9 +18,9 @@ class MHDRM(ManhaSensor):
         release_angle (int): Servo angle for release position (degrees).
     """
 
-    _DEFAULT_PIN = const(15)
-    _DEFAULT_HOLD_ANGLE = const(0)
-    _DEFAULT_RELEASE_ANGLE = const(90)
+    _DEFAULT_PIN = const(6)
+    _DEFAULT_HOLD_ANGLE = const(35)
+    _DEFAULT_RELEASE_ANGLE = const(0)
 
     def __init__(
         self,

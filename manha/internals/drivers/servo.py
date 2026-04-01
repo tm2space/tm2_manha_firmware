@@ -15,8 +15,8 @@ class Servo:
     """
 
     _DEFAULT_FREQ = const(50)
-    _DEFAULT_MIN_DUTY = const(1640)  # ~0.5ms pulse at 50Hz (0°)
-    _DEFAULT_MAX_DUTY = const(8190)  # ~2.5ms pulse at 50Hz (180°)
+    _DEFAULT_MIN_DUTY = const(2500)  # ~0.76ms pulse at 50Hz (0°)
+    _DEFAULT_MAX_DUTY = const(7500)  # ~2.29ms pulse at 50Hz (180°)
 
     def __init__(
         self,
