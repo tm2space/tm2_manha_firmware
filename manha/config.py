@@ -7,6 +7,7 @@ LOW_POWER_TELEMETRY_INTERVAL_MS = const(5000)  # ms between TLM in Low-Power Mod
 
 # Set True for legacy JSON packetization (deprecated).
 USE_LEGACY_PACKETIZATION = False
+ENABLE_HDRM = False
 
 COMMANDS = {
     "help": "Display available commands",

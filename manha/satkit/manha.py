@@ -279,6 +279,26 @@ class MANHA:
             except:
                 print("ENV failed")
 
+        # HDRM setup (guarded by config flag)
+        if ENABLE_HDRM:
+
+            def read_hdrm():
+                try:
+                    if not hasattr(self, "_hdrm"):
+                        from manha.satkit.peripherals import MHDRM
+
+                        self._hdrm = MHDRM()
+                    return self._hdrm.read()
+                except:
+                    return {"hdrm": -1}
+
+            try:
+                self.add_sensor(read_hdrm, essential=False)
+                print("MHDRM OK")
+                gc.collect()
+            except:
+                print("MHDRM failed")
+
         # final_memory = gc.mem_free()
         # print(f"Sensor setup complete - Free memory: {final_memory}")
 
@@ -401,6 +421,23 @@ class MANHA:
                     return "Low power mode disabled"
                 else:
                     return "LPM value must be 0 or 1"
+
+            elif command.startswith("HDRM="):
+                if not ENABLE_HDRM:
+                    return "HDRM not enabled"
+                hdrm_val = int(command.split("=")[1])
+                if not hasattr(self, "_hdrm"):
+                    from manha.satkit.peripherals import MHDRM
+
+                    self._hdrm = MHDRM()
+                if hdrm_val == 1:
+                    self._hdrm.release()
+                    return "HDRM released"
+                elif hdrm_val == 0:
+                    self._hdrm.hold()
+                    return "HDRM held"
+                else:
+                    return "HDRM value must be 0 or 1"
             else:
                 return f"Unknown command: {command}"
 
