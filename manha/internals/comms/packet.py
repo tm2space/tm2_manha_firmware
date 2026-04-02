@@ -12,10 +12,9 @@ if USE_LEGACY_PACKETIZATION:
     )
 
 # Message type constants (binary protocol only)
-MSG_TLM = 0x01  # Binary telemetry
-MSG_ACK = 0x02  # Binary ACK
-MSG_CMD = 0x03  # Command (UTF-8 text)
-MSG_CMD_RESP = 0x04  # Command response (UTF-8 text)
+MSG_TM = 0x01  # Telemetry (satellite -> GS)
+MSG_TC = 0x02  # Telecommand (GS -> satellite)
+MSG_TC_ACK = 0x03  # Telecommand acknowledgment (satellite -> GS)
 
 
 class Packet:
@@ -43,7 +42,7 @@ class Packet:
             addr_to: Destination address (0-255)
             addr_from: Source address (0-255)
             message: Message payload as bytes
-            msg_type: Message type (MSG_TLM, MSG_ACK, MSG_CMD, MSG_CMD_RESP). Ignored in legacy mode.
+            msg_type: Message type (MSG_TM, MSG_TC, MSG_TC_ACK). Ignored in legacy mode.
             checksum: Message checksum (calculated if not provided)
             rssi: Received Signal Strength Indicator (set during reception)
             snr: Signal to Noise Ratio (set during reception)

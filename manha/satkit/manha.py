@@ -69,8 +69,7 @@ class MANHA:
         self.telemetry_data = {}
 
         # Command handling flags
-        self.command_flag = False
-        self.command_response = None
+
         self._packet_count = 0
         self._tlm_generator = None
 
@@ -125,6 +124,7 @@ class MANHA:
         self.add_command("TXPOW", self._cmd_txpow)
         self.add_command("LPM", self._cmd_lpm)
         self.add_command("HDRM", self._cmd_hdrm)
+        self.add_command("CAM", self._cmd_cam)
 
     def _cmd_ping(self, command, sender_addr):
         """Handle PING command"""
@@ -184,6 +184,25 @@ class MANHA:
                 return "HDRM held"
             else:
                 return "HDRM value must be 0 or 1"
+        except (IndexError, ValueError) as e:
+            return f"Command format error: {e}"
+
+    def _cmd_cam(self, command, sender_addr):
+        """Handle CAM=<0/1> command - 1=capture, 0=status"""
+        try:
+            if not ENABLE_CAM:
+                return "CAM not enabled"
+            val = int(command.split("=")[1])
+            if not hasattr(self, "_cam"):
+                from manha.satkit.peripherals import ManhaCam
+
+                self._cam = ManhaCam()
+            if val == 1:
+                fname = self._cam.capture()
+                return f"CAM:{fname}" if fname else "CAM:FAIL"
+            else:
+                data = self._cam.read()
+                return f"CAM:count={data['cam_count']}"
         except (IndexError, ValueError) as e:
             return f"Command format error: {e}"
 
@@ -343,6 +362,26 @@ class MANHA:
             except:
                 print("MHDRM failed")
 
+        # Camera setup (guarded by config flag)
+        if ENABLE_CAM:
+
+            def read_cam():
+                try:
+                    if not hasattr(self, "_cam"):
+                        from manha.satkit.peripherals import ManhaCam
+
+                        self._cam = ManhaCam()
+                    return self._cam.read()
+                except:
+                    return {"cam_count": -1}
+
+            try:
+                self.add_sensor(read_cam, essential=False)
+                print("ManhaCam OK")
+                gc.collect()
+            except:
+                print("ManhaCam failed")
+
         # final_memory = gc.mem_free()
         # print(f"Sensor setup complete - Free memory: {final_memory}")
 
@@ -374,7 +413,7 @@ class MANHA:
 
     async def _listen_for_commands(self, listen_time_ms: int):
         """Listen for incoming LoRa commands for a given duration"""
-        from manha.internals.comms.packet import Packet, MSG_CMD
+        from manha.internals.comms.packet import Packet, MSG_TC
 
         self.lora._modem.set_mode_rx()
         start_time = time.ticks_ms()
@@ -393,12 +432,13 @@ class MANHA:
                                     command_bytes, packet.addr_from
                                 )
                         else:
-                            if packet.msg_type == MSG_CMD:
+                            if packet.msg_type == MSG_TC:
                                 command_bytes = packet.message.strip()
                                 await self._process_command_bytes(
                                     command_bytes, packet.addr_from
                                 )
-                        return
+                        # Resume RX after processing (TC_ACK TX switches to Standby)
+                        self.lora._modem.set_mode_rx()
 
             await asyncio.sleep_ms(10)
 
@@ -424,8 +464,7 @@ class MANHA:
                 response = f"Unknown command: {command}"
 
             if response:
-                self.command_response = response
-                self.command_flag = True
+                await self._send_response_direct(response, sender_addr)
 
         except Exception as e:
             print(f"Command processing error: {e}")
@@ -443,7 +482,7 @@ class MANHA:
     async def _send_response_direct(self, response: str, target_addr: int):
         """Send command response using direct modem access"""
         try:
-            from manha.internals.comms.packet import Packet, MSG_CMD_RESP
+            from manha.internals.comms.packet import Packet, MSG_TC_ACK
 
             if USE_LEGACY_PACKETIZATION:
                 message = f"CMD:{response}\r\n".encode("utf-8")
@@ -451,7 +490,7 @@ class MANHA:
             else:
                 message = response.encode("utf-8")
                 packet = Packet(
-                    target_addr, self.lora_address_self, message, msg_type=MSG_CMD_RESP
+                    target_addr, self.lora_address_self, message, msg_type=MSG_TC_ACK
                 )
 
             self.lora._modem.set_mode_idle()
@@ -615,33 +654,20 @@ class MANHA:
                 pass
 
     async def _prepare_telemetry_async(self):
-        """Prepare telemetry payload, including any pending command response
+        """Prepare telemetry payload
 
         Returns:
             tuple: (bytes, msg_type) where msg_type is used for binary packet header
         """
-        from manha.internals.comms.packet import MSG_TLM, MSG_CMD_RESP
-
-        # Check command response
-        if self.command_flag and self.command_response:
-            try:
-                response_bytes = self.command_response.encode("utf-8")
-                self._log_tx(self.command_response)
-                self.command_flag = False
-                self.command_response = None
-                return response_bytes, MSG_CMD_RESP
-            except MemoryError:
-                self.command_flag = False
-                self.command_response = None
-                return b'{"cmd":"mem_err"}', MSG_CMD_RESP
+        from manha.internals.comms.packet import MSG_TM
 
         # Get telemetry
         try:
             async with self.telemetry_lock:
                 if not self.telemetry_data:
                     if USE_LEGACY_PACKETIZATION:
-                        return b"{}", MSG_TLM
-                    return None, MSG_TLM
+                        return b"{}", MSG_TM
+                    return None, MSG_TM
                 tlm_data_copy = self.telemetry_data.copy()
 
             self._log_tx(tlm_data_copy)
@@ -653,15 +679,15 @@ class MANHA:
                         tlm_data_copy
                     )
                 try:
-                    return next(self._tlm_generator), MSG_TLM
+                    return next(self._tlm_generator), MSG_TM
                 except StopIteration:
                     self._tlm_generator = self._prepare_telemetry_generator(
                         tlm_data_copy
                     )
                     try:
-                        return next(self._tlm_generator), MSG_TLM
+                        return next(self._tlm_generator), MSG_TM
                     except StopIteration:
-                        return b"{}", MSG_TLM
+                        return b"{}", MSG_TM
             else:
                 # Binary protocol path
                 from manha.internals.comms.binary_tlm import encode_tlm
@@ -673,17 +699,17 @@ class MANHA:
                     time.ticks_ms(),
                 )
                 self._seq_number = (self._seq_number + 1) & 0xFF
-                return tlm_bytes, MSG_TLM
+                return tlm_bytes, MSG_TM
 
         except MemoryError:
             if USE_LEGACY_PACKETIZATION:
-                return b'{"tlm":"mem_err"}', MSG_TLM
-            return None, MSG_TLM
+                return b'{"tlm":"mem_err"}', MSG_TM
+            return None, MSG_TM
         except Exception as e:
             print(f"TLM prepare error: {e}")
             if USE_LEGACY_PACKETIZATION:
-                return b'{"tlm":"err"}', MSG_TLM
-            return None, MSG_TLM
+                return b'{"tlm":"err"}', MSG_TM
+            return None, MSG_TM
 
     async def lora_tlm_task(self, interval=3):
         """Async task that transmits telemetry over LoRa and listens for commands"""
@@ -696,12 +722,8 @@ class MANHA:
                 current_time = time.ticks_ms()
                 time_since_last_tlm = time.ticks_diff(current_time, last_telemetry_time)
 
-                if (
-                    time_since_last_tlm >= self._sensor_read_interval
-                    or self.command_flag
-                ):
+                if time_since_last_tlm >= self._sensor_read_interval:
                     target_addr = self.lora_address_to
-                    ack_received = False
 
                     tlm_bytes, msg_type = await self._prepare_telemetry_async()
 
@@ -719,8 +741,11 @@ class MANHA:
                             self.lora._modem.set_mode_idle()
                             if self.lora._modem.send(packet.encode()):
                                 if await self._wait_tx_done():
-                                    if await self._wait_for_simple_ack(300):
-                                        ack_received = True
+                                    self._packet_count += 1
+                                    if not self.low_power_mode:
+                                        await self.blink_led_matrix(PixelColors.GREEN)
+                                else:
+                                    await self.blink_led_matrix(PixelColors.MAGENTA)
 
                             packet = None
 
@@ -728,19 +753,13 @@ class MANHA:
                             await self.blink_led_matrix(PixelColors.RED)
 
                     last_telemetry_time = current_time
-                    if ack_received:
-                        self._packet_count += 1
-                        if not self.low_power_mode:
-                            await self.blink_led_matrix(PixelColors.GREEN)
-                    else:
-                        await self.blink_led_matrix(PixelColors.MAGENTA)
-
                     tlm_bytes = None
                     gc.collect()
 
-                await self._listen_for_commands(100)
-
-                await asyncio.sleep_ms(50)
+                # Listen for commands for remaining time in TM interval
+                elapsed = time.ticks_diff(time.ticks_ms(), last_telemetry_time)
+                listen_time = max(50, self._sensor_read_interval - elapsed - 50)
+                await self._listen_for_commands(listen_time)
 
             except MemoryError:
                 # print("LoRa task: memory allocation failed")
@@ -761,32 +780,6 @@ class MANHA:
             if time.ticks_diff(time.ticks_ms(), start_time) > timeout_ms:
                 return False
             await asyncio.sleep_ms(10)
-
-    async def _wait_for_simple_ack(self, timeout_ms: int) -> bool:
-        """Wait for ACK packet"""
-        from manha.internals.comms.packet import MSG_ACK
-
-        self.lora._modem.set_mode_rx()
-        start_time = time.ticks_ms()
-
-        while time.ticks_diff(time.ticks_ms(), start_time) < timeout_ms:
-            if self.lora._modem._is_flag_set(0x40):  # RX_DONE
-                recv_result = self.lora._modem.recv_data()
-                if recv_result:
-                    raw_data, _, _ = recv_result
-                    if USE_LEGACY_PACKETIZATION:
-                        # Legacy: check for ACK/CMD text at byte offset 3
-                        if len(raw_data) >= 6 and raw_data[3:6] == b"ACK":
-                            return True
-                        elif len(raw_data) >= 6 and raw_data[3:6] == b"CMD":
-                            return True
-                    else:
-                        # Binary: check msg_type byte at offset 2
-                        if len(raw_data) >= 4 and raw_data[2] == MSG_ACK:
-                            return True
-            await asyncio.sleep_ms(20)
-
-        return False
 
     async def _shutdown(self):
         """Clean up resources before shutdown"""

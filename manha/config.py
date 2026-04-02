@@ -8,6 +8,7 @@ LOW_POWER_TELEMETRY_INTERVAL_MS = const(5000)  # ms between TLM in Low-Power Mod
 # Set True for legacy JSON packetization (deprecated).
 USE_LEGACY_PACKETIZATION = False
 ENABLE_HDRM = False
+ENABLE_CAM = False
 SATKIT_LOG_TELEMETRY_TO_CONSOLE = False
 SATKIT_LOG_TELEMETRY_TO_FILE = False  # False or filename string (e.g., "tlm.log")
 

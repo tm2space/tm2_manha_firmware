@@ -10,7 +10,7 @@ from machine import Pin, SPI
 
 from manha.internals.drivers import RFM9x, ModemConfig
 from manha.internals.drivers.rfm9x_constants import *
-from manha.internals.comms.packet import Packet, MSG_TLM, MSG_ACK, MSG_CMD, MSG_CMD_RESP
+from manha.internals.comms.packet import Packet, MSG_TM, MSG_TC, MSG_TC_ACK
 from manha.config import USE_LEGACY_PACKETIZATION
 from .constants import *
 
@@ -71,66 +71,69 @@ class LoRa:
         self._receiver_running = False
         self._stop_receiver = False
         self._last_telemetry = None
+        self._tc_ack_event = asyncio.Event()
         self._callbacks = {CALLBACK_TELEMETRY: None, CALLBACK_COMMAND_RESPONSE: None}
 
-    async def send_command(self, command: str, target_addr: int = None) -> bool:
-        """Send command to satellite
+    async def send_command(
+        self,
+        command: str,
+        target_addr: int = None,
+        retries: int = 3,
+        ack_timeout_ms: int = 1500,
+    ) -> bool:
+        """Send command to satellite with retry until TC_ACK
 
         Args:
             command: Command string (e.g., "PING", "RESET")
             target_addr: Target address (uses satellite_address if None)
+            retries: Number of send attempts
+            ack_timeout_ms: Timeout per attempt waiting for TC_ACK
 
         Returns:
-            bool: True if sent successfully
+            bool: True if TC_ACK received
         """
         if target_addr is None:
             target_addr = self.satellite_address
 
-        try:
-            if USE_LEGACY_PACKETIZATION:
-                message = f"CMD:{command}\r\n".encode("utf-8")
-                packet = Packet(target_addr, self.device_id, message)
-            else:
-                message = command.encode("utf-8")
-                packet = Packet(target_addr, self.device_id, message, msg_type=MSG_CMD)
+        if USE_LEGACY_PACKETIZATION:
+            message = f"CMD:{command}\r\n".encode("utf-8")
+        else:
+            message = command.encode("utf-8")
 
-            async with self._lock:
-                self._modem.set_mode_idle()
-                if self._modem.send(packet.encode()):
-                    return await self._wait_for_tx_complete()
-                return False
+        for attempt in range(retries):
+            try:
+                if USE_LEGACY_PACKETIZATION:
+                    packet = Packet(target_addr, self.device_id, message)
+                else:
+                    packet = Packet(
+                        target_addr, self.device_id, message, msg_type=MSG_TC
+                    )
 
-        except Exception as e:
-            print(f"Command send error: {e}")
-            return False
+                self._tc_ack_event.clear()
 
-    async def send_ack(self, seq: int, target_addr: int) -> bool:
-        """Send ACK packet
+                async with self._lock:
+                    self._modem.set_mode_idle()
+                    if not self._modem.send(packet.encode()):
+                        self._modem.set_mode_rx()
+                        continue
+                    if not await self._wait_for_tx_complete():
+                        self._modem.set_mode_rx()
+                        continue
+                    self._modem.set_mode_rx()
 
-        Args:
-            seq: Sequence number to acknowledge
-            target_addr: Target address
+                # Wait for TC_ACK from receiver loop
+                start = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), start) < ack_timeout_ms:
+                    if self._tc_ack_event.is_set():
+                        return True
+                    await asyncio.sleep_ms(20)
 
-        Returns:
-            bool: True if sent successfully
-        """
-        try:
-            if USE_LEGACY_PACKETIZATION:
-                message = f"ACK:{seq}\r\n".encode("utf-8")
-                packet = Packet(target_addr, self.device_id, message)
-            else:
-                message = bytes([seq & 0xFF])
-                packet = Packet(target_addr, self.device_id, message, msg_type=MSG_ACK)
+                print(f"TC retry {attempt + 1}/{retries}: no AK for {command}")
 
-            async with self._lock:
-                self._modem.set_mode_idle()
-                if self._modem.send(packet.encode()):
-                    return await self._wait_for_tx_complete()
-                return False
+            except Exception as e:
+                print(f"Command send error: {e}")
 
-        except Exception as e:
-            print(f"ACK send error: {e}")
-            return False
+        return False
 
     def set_callback(self, callback_type: int, callback_func):
         """Set callback for received data
@@ -211,23 +214,22 @@ class LoRa:
                 if isinstance(data, dict) and "_part" in data:
                     # Multipart (legacy, rarely used)
                     return
-                print(f"TLM:{message}")
-                await self.send_ack(0, packet.addr_from)
+                print(f"TM:{message}")
                 self._last_telemetry = data
                 if self._callbacks[CALLBACK_TELEMETRY]:
                     await self._callbacks[CALLBACK_TELEMETRY](data, packet)
             except Exception as e:
                 print(f"JSON parse error: {e}")
         else:
-            print(f"CMDR:{message}")
+            print(f"AK:{message}")
             if self._callbacks[CALLBACK_COMMAND_RESPONSE]:
                 await self._callbacks[CALLBACK_COMMAND_RESPONSE](message, packet)
 
     async def _process_binary(self, packet: Packet):
         """Process binary protocol packet by msg_type"""
-        if packet.msg_type == MSG_TLM:
+        if packet.msg_type == MSG_TM:
             await self._handle_binary_telemetry(packet)
-        elif packet.msg_type == MSG_CMD_RESP:
+        elif packet.msg_type == MSG_TC_ACK:
             response = packet.message.decode("utf-8").strip()
             await self._handle_command_response(response, packet)
         else:
@@ -247,9 +249,8 @@ class LoRa:
 
             # Forward as JSON over USB serial (app compatibility)
             json_str = json.dumps(data)
-            print(f"TLM:{json_str}")
+            print(f"TM:{json_str}")
 
-            await self.send_ack(seq, packet.addr_from)
             self._last_telemetry = data
             if self._callbacks[CALLBACK_TELEMETRY]:
                 await self._callbacks[CALLBACK_TELEMETRY](data, packet)
@@ -259,7 +260,8 @@ class LoRa:
 
     async def _handle_command_response(self, response: str, packet: Packet):
         """Handle command response"""
-        print(f"CMDR:{response}")
+        print(f"AK:{response}")
+        self._tc_ack_event.set()
         if self._callbacks[CALLBACK_COMMAND_RESPONSE]:
             try:
                 await self._callbacks[CALLBACK_COMMAND_RESPONSE](response, packet)
