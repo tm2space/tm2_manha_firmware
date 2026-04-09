@@ -125,6 +125,8 @@ class MANHA:
         self.add_command("LPM", self._cmd_lpm)
         self.add_command("HDRM", self._cmd_hdrm)
         self.add_command("CAM", self._cmd_cam)
+        self.add_command("CAMSET", self._cmd_camset)
+        self.add_command("CAMGET", self._cmd_camget)
 
     def _cmd_ping(self, command, sender_addr):
         """Handle PING command"""
@@ -204,6 +206,47 @@ class MANHA:
                 data = self._cam.read()
                 return f"CAM:count={data['cam_count']}"
         except (IndexError, ValueError) as e:
+            return f"Command format error: {e}"
+
+    def _cmd_camset(self, command, sender_addr):
+        """Handle CAMSET=02:0A,16:01 command - set camera settings via hex key:value pairs"""
+        try:
+            if not ENABLE_CAM:
+                return "CAM not enabled"
+            if not hasattr(self, "_cam"):
+                from manha.satkit.peripherals import ManhaCam
+
+                self._cam = ManhaCam()
+            # Parse hex key:value pairs from command
+            # Format: CAMSET=02:0A,16:01
+            pairs = command.split("=")[1].split(",")
+            raw = b""
+            for pair in pairs:
+                k, v = pair.split(":")
+                raw += bytes([int(k, 16), int(v, 16)])
+            resp = self._cam.configure_remote(raw)
+            return f"CAMSET:{resp}" if resp else "CAMSET:FAIL"
+        except (IndexError, ValueError) as e:
+            return f"Command format error: {e}"
+
+    def _cmd_camget(self, command, sender_addr):
+        """Handle CAMGET command - read all camera settings as hex key:value pairs"""
+        try:
+            if not ENABLE_CAM:
+                return "CAM not enabled"
+            if not hasattr(self, "_cam"):
+                from manha.satkit.peripherals import ManhaCam
+
+                self._cam = ManhaCam()
+            raw = self._cam.read_settings()
+            if raw is None or len(raw) < 2:
+                return "CAMGET:FAIL"
+            # Format raw bytes as hex key:value pairs
+            pairs = []
+            for i in range(0, len(raw), 2):
+                pairs.append(f"{raw[i]:02X}:{raw[i + 1]:02X}")
+            return "CAMGET:" + ",".join(pairs)
+        except Exception as e:
             return f"Command format error: {e}"
 
     def add_command(self, command_name: str, callback) -> None:
