@@ -261,39 +261,20 @@ class ManhaGS:
 
     async def serial_command_task(self):
         """
-        Task that listens for serial commands and processes them
+        Task that listens for serial commands and processes them.
 
-        This method runs as an asyncio task, checking for input on the serial
-        console and parsing commands when received. Commands are then sent to
-        the satellite via LoRa.
+        Reads complete lines from stdin. Only processes lines containing
+        the CC: prefix to filter out USB serial loopback noise.
         """
+        _CMD_PREFIX = "CC:"
 
         while True:
-            # Check if there's data available on stdin
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                char = sys.stdin.read(1)
+                line = sys.stdin.readline().strip()
+                idx = line.find(_CMD_PREFIX)
+                if idx != -1:
+                    await self.process_command(line[idx + len(_CMD_PREFIX):])
 
-                # Process backspace
-                if char == "\b" or char == "\x7f":  # Backspace or Delete
-                    if self.command_buffer:
-                        self.command_buffer = self.command_buffer[:-1]
-                        # Move cursor back, clear character, move cursor back again
-                        sys.stdout.write("\b \b")
-                # Process enter key
-                elif char == "\n" or char == "\r":
-                    sys.stdout.write("\n")
-                    # Process the command if buffer is not empty
-                    if self.command_buffer:
-                        await self.process_command(self.command_buffer)
-                        self.command_buffer = ""
-                    # Print new prompt
-                # Add other characters to buffer
-                else:
-                    # Echo the character
-                    sys.stdout.write(char)
-                    self.command_buffer += char
-
-            # Yield to other tasks
             await asyncio.sleep(0.05)
 
     async def process_command(self, command_str):

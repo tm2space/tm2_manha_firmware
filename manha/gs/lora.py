@@ -70,7 +70,9 @@ class LoRa:
         self._lock = asyncio.Lock()
         self._receiver_running = False
         self._stop_receiver = False
+        self._tx_in_progress = False
         self._last_telemetry = None
+        self._last_tm_time = 0
         self._tc_ack_event = asyncio.Event()
         self._callbacks = {CALLBACK_TELEMETRY: None, CALLBACK_COMMAND_RESPONSE: None}
 
@@ -100,26 +102,31 @@ class LoRa:
         else:
             message = command.encode("utf-8")
 
+        if USE_LEGACY_PACKETIZATION:
+            packet = Packet(target_addr, self.device_id, message)
+        else:
+            packet = Packet(
+                target_addr, self.device_id, message, msg_type=MSG_TC
+            )
+
+        encoded = packet.encode()
+
         for attempt in range(retries):
             try:
-                if USE_LEGACY_PACKETIZATION:
-                    packet = Packet(target_addr, self.device_id, message)
-                else:
-                    packet = Packet(
-                        target_addr, self.device_id, message, msg_type=MSG_TC
-                    )
-
                 self._tc_ack_event.clear()
+                self._tx_in_progress = True
 
-                async with self._lock:
-                    self._modem.set_mode_idle()
-                    if not self._modem.send(packet.encode()):
-                        self._modem.set_mode_rx()
-                        continue
-                    if not await self._wait_for_tx_complete():
-                        self._modem.set_mode_rx()
-                        continue
+                self._modem.set_mode_idle()
+                if not self._modem.send(encoded):
+                    self._tx_in_progress = False
                     self._modem.set_mode_rx()
+                    continue
+                if not await self._wait_for_tx_complete():
+                    self._tx_in_progress = False
+                    self._modem.set_mode_rx()
+                    continue
+                self._tx_in_progress = False
+                self._modem.set_mode_rx()
 
                 # Wait for TC_ACK from receiver loop
                 start = time.ticks_ms()
@@ -128,9 +135,10 @@ class LoRa:
                         return True
                     await asyncio.sleep_ms(20)
 
-                print(f"TC retry {attempt + 1}/{retries}: no AK for {command}")
+                print(f"TC:{attempt + 1}/{retries}")
 
             except Exception as e:
+                self._tx_in_progress = False
                 print(f"Command send error: {e}")
 
         return False
@@ -158,26 +166,34 @@ class LoRa:
             await asyncio.sleep_ms(10)
 
     async def _receiver_loop(self):
-        """Main receiver loop"""
+        """Main receiver loop. Pauses when send_command() is transmitting
+        to avoid aborting TX by switching modem to RX."""
         self._receiver_running = True
 
         while not self._stop_receiver:
             try:
+                # Skip modem access while TX is in progress
+                if self._tx_in_progress:
+                    await asyncio.sleep_ms(10)
+                    continue
+
                 self._modem.set_mode_rx()
 
                 start_time = time.ticks_ms()
-                while not self._stop_receiver:
+                recv_result = None
+                while not self._stop_receiver and not self._tx_in_progress:
                     if self._modem._is_flag_set(RX_DONE):
                         recv_result = self._modem.recv_data()
-                        if recv_result:
-                            raw_data, rssi, snr = recv_result
-                            await self._process_received_data(raw_data, rssi, snr)
                         break
 
                     if time.ticks_diff(time.ticks_ms(), start_time) > 1000:
                         break
 
                     await asyncio.sleep_ms(5)
+
+                if recv_result:
+                    raw_data, rssi, snr = recv_result
+                    await self._process_received_data(raw_data, rssi, snr)
 
                 await asyncio.sleep_ms(10)
 
@@ -252,6 +268,7 @@ class LoRa:
             print(f"TM:{json_str}")
 
             self._last_telemetry = data
+            self._last_tm_time = time.ticks_ms()
             if self._callbacks[CALLBACK_TELEMETRY]:
                 await self._callbacks[CALLBACK_TELEMETRY](data, packet)
 
