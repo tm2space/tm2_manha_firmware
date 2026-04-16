@@ -18,7 +18,7 @@ static size_t log_buf_pos = 0;
 
 void log_flush()
 {
-    if (!sd_ok || log_buf_pos == 0)
+    if (!hw.sd_ok || log_buf_pos == 0)
         return;
 
     File f = SDFS.open(LOG_FILE, FILE_APPEND);
@@ -103,7 +103,7 @@ static esp_err_t handler_index(httpd_req_t *req)
 static esp_err_t handler_api_status(httpd_req_t *req)
 {
     uint32_t count = 0;
-    if (sd_ok)
+    if (hw.sd_ok)
     {
         File root = SDFS.open(IMAGE_DIR);
         if (root && root.isDirectory())
@@ -116,10 +116,10 @@ static esp_err_t handler_api_status(httpd_req_t *req)
             root.close();
         }
     }
-    double free_mb = sd_ok ? (SDFS.totalBytes() - SDFS.usedBytes()) / 1048576.0 : 0;
+    double free_mb = hw.sd_ok ? (SDFS.totalBytes() - SDFS.usedBytes()) / 1048576.0 : 0;
 
     JsonDocument doc;
-    doc["sd"]      = sd_ok;
+    doc["sd"]      = hw.sd_ok;
     doc["images"]  = count;
     doc["free_mb"] = serialized(String(free_mb, 1));
     return send_json(req, doc);
@@ -130,7 +130,7 @@ static esp_err_t handler_api_images(httpd_req_t *req)
     JsonDocument doc;
     JsonArray files = doc["files"].to<JsonArray>();
 
-    if (sd_ok)
+    if (hw.sd_ok)
     {
         File root = SDFS.open(IMAGE_DIR);
         if (root && root.isDirectory())
@@ -335,7 +335,7 @@ static esp_err_t handler_api_get_logs(httpd_req_t *req)
 
     JsonDocument doc;
 
-    if (!sd_ok || !SDFS.exists(LOG_FILE))
+    if (!hw.sd_ok || !SDFS.exists(LOG_FILE))
     {
         doc["offset"] = 0;
         doc["size"]   = 0;
@@ -374,7 +374,7 @@ static esp_err_t handler_api_get_logs(httpd_req_t *req)
 static esp_err_t handler_api_clear_logs(httpd_req_t *req)
 {
     log_buf_pos = 0;
-    if (sd_ok && SDFS.exists(LOG_FILE))
+    if (hw.sd_ok && SDFS.exists(LOG_FILE))
         SDFS.remove(LOG_FILE);
 
     JsonDocument doc;
@@ -398,6 +398,15 @@ static esp_err_t handler_api_ota(httpd_req_t *req)
     if (!Update.begin(total))
     {
         log_send("[OTA] Not enough space\n");
+        // drain remaining body so httpd doesn't re-trigger handler
+        char drain[512];
+        int left = total;
+        while (left > 0) {
+            int r = httpd_req_recv(req, drain, (left < (int)sizeof(drain)) ? left : (int)sizeof(drain));
+            if (r <= 0) break;
+            left -= r;
+        }
+        httpd_resp_set_hdr(req, "Connection", "close");
         JsonDocument doc;
         doc["ok"]    = false;
         doc["error"] = "Not enough space for update";
@@ -432,6 +441,13 @@ static esp_err_t handler_api_ota(httpd_req_t *req)
     if (failed || !Update.end(true))
     {
         Update.abort();
+        // drain any unsent body data
+        while (remaining > 0) {
+            int r = httpd_req_recv(req, (char *)buf, (remaining < (int)sizeof(buf)) ? remaining : (int)sizeof(buf));
+            if (r <= 0) break;
+            remaining -= r;
+        }
+        httpd_resp_set_hdr(req, "Connection", "close");
         log_send("[OTA] Update failed\n");
         doc["ok"]    = false;
         doc["error"] = "Update failed";

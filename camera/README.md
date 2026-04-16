@@ -8,10 +8,12 @@ with the Satkit Pico.
 ## Hardware
 
 The ManhaCam uses an **ESP32-CAM AI-Thinker** module (`CAMERA_MODEL_AI_THINKER`
-in `board_config.h`). It has PSRAM and a flash LED on GPIO 4.
+in `board_config.h`). It has PSRAM.
 
-PSRAM is required for UXGA resolution and high JPEG quality. Select a partition
-scheme with at least 3 MB APP space.
+PSRAM is required for UXGA resolution and high JPEG quality. Use the **Minimal
+SPIFFS (1.9MB APP with OTA/190KB SPIFFS)** partition scheme — this gives two
+1.9MB OTA-capable app slots. Do **not** use Huge APP (3MB), which has no OTA
+slot.
 
 ## Build & Flash
 
@@ -53,9 +55,17 @@ Make sure the adapter is **5V-tolerant** or use the 3.3V rail if your adapter
 only supports that. The board needs 5V for stable camera operation though, so
 powering via 5V is recommended.
 
+## Boot Behaviour
+
+The firmware boots in **flight mode** — WiFi and the HTTP server are off. This
+saves power and avoids RF interference during satellite operation.
+
+To enable the web UI, send the `0x05` (WEBUI_ON) command over UART. To disable
+it again, send `0x06` (WEBUI_OFF). See the serial command table below.
+
 ## WiFi Access Point
 
-On boot the module creates a WiFi AP:
+When the web UI is enabled, the module creates a WiFi AP:
 
 | Parameter      | Default       |
 |----------------|---------------|
@@ -65,8 +75,9 @@ On boot the module creates a WiFi AP:
 | Max clients    | 4             |
 | IP             | `192.168.4.1` |
 
-A captive portal is enabled by default (`ENABLE_CAPTIVE_PORTAL 1` in
-`board_config.h`) so the web UI opens automatically when a device connects.
+A captive portal can be enabled by setting `ENABLE_CAPTIVE_PORTAL 1` in
+`board_config.h` (disabled by default) so the web UI opens automatically when
+a device connects.
 
 ## Web UI
 
@@ -79,6 +90,7 @@ single-page interface (served from PROGMEM via `web_ui.h`) provides:
 - Camera settings editor (resolution, quality, brightness, contrast, etc.)
 - Named presets (Default, High Quality, Low Light, Fast Capture)
 - Factory reset
+- OTA firmware update with cancel support
 - Log viewer
 
 ## HTTP/JSON API
@@ -137,8 +149,7 @@ All API endpoints return JSON.
   "raw_gma": 1,
   "lenc": 1,
   "hmirror": 0,
-  "vflip": 0,
-  "flash": 0
+  "vflip": 0
 }
 ```
 
@@ -153,13 +164,17 @@ lets you flash new firmware over WiFi without a serial connection.
 ### How to update
 
 1. In the Arduino IDE, go to **Sketch > Export Compiled Binary**. This produces
-   a `.bin` file in the sketch folder.
+   build output in `build/<board>/`. The file you need is `camera.ino.bin`
+   (the app binary, ~1.2MB).
 2. Connect to the `Manha-CAM` WiFi network and open `http://192.168.4.1/`.
-3. Expand the **Firmware Update** panel.
+3. Go to the **System** tab and find **Firmware Update**.
 4. Select the `.bin` file and click **Upload & Flash**.
 5. A confirmation dialog will appear — confirm to proceed.
-6. The progress bar shows upload status. Once complete, the camera reboots
-   automatically into the new firmware.
+6. The progress bar shows upload status. Click **Cancel** at any time to abort.
+7. Once complete, the camera reboots automatically into the new firmware.
+
+Do **not** upload `.elf`, `.merged.bin`, `.bootloader.bin`, or
+`.partitions.bin` — only the app binary (`camera.ino.bin`) works with OTA.
 
 ### API
 
@@ -186,11 +201,13 @@ baud)**. This is how the Satkit Pico triggers captures and queries status.
 | `0x02` | STATUS       | —                    | `ACK:count=<N>\n`                             |
 | `0x03` | SET_SETTINGS | key-value pairs + `0x00` | `ACK:settings=<N>\n` or `NACK:<reason>\n` |
 | `0x04` | GET_SETTINGS | —                    | `0x04` + key-value pairs + `0x00\n`           |
+| `0x05` | WEBUI_ON     | —                    | `ACK:webui=on,ip=<IP>\n`                      |
+| `0x06` | WEBUI_OFF    | —                    | `ACK:webui=off\n`                             |
 | other  | unknown      | —                    | `NACK:unknown_cmd=0xNN\n`                     |
 
 ### Binary Settings Key IDs
 
-Settings are sent as key-value byte pairs. Keys are `0x01`–`0x16`, values are
+Settings are sent as key-value byte pairs. Keys are `0x01`–`0x15`, values are
 single unsigned bytes (signed fields like brightness use two's complement).
 
 | Key    | Field          | Type  | Range      |
@@ -216,13 +233,12 @@ single unsigned bytes (signed fields like brightness use two's complement).
 | `0x13` | lenc           | bool  | 0/1        |
 | `0x14` | hmirror        | bool  | 0/1        |
 | `0x15` | vflip          | bool  | 0/1        |
-| `0x16` | flash          | bool  | 0/1        |
 
-Example — set JPEG quality to 10 and flash on:
+Example — set JPEG quality to 10:
 ```
-TX: 0x03 0x02 0x0A 0x16 0x01 0x00
-     cmd  key  val  key  val  end
-RX: ACK:settings=2\n
+TX: 0x03 0x02 0x0A 0x00
+     cmd  key  val  end
+RX: ACK:settings=1\n
 ```
 
 ### Satkit Peripheral
@@ -255,8 +271,8 @@ Compile-time options in `board_config.h`:
 | Define                  | Default        | Description                         |
 |-------------------------|----------------|-------------------------------------|
 | `CAMERA_MODEL_*`        | `AI_THINKER`   | Board/pin mapping selection         |
-| `ENABLE_CAPTIVE_PORTAL` | `1`            | Auto-redirect to web UI on connect  |
-| `ENABLE_SERIAL_LOG`     | `1`            | Echo logs to UART ^[1]              |
+| `ENABLE_CAPTIVE_PORTAL` | `0`            | Auto-redirect to web UI on connect  |
+| `ENABLE_SERIAL_LOG`     | `0`            | Echo logs to UART ^[1]              |
 | `LOG_FILE`              | `"/logs.txt"`  | SD card log file path               |
 | `MAX_LOG_BYTES`         | `16384`        | Max log file size before truncation |
 | `LOG_BUF_SIZE`          | `512`          | RAM log buffer (flushed every 5 s)  |
@@ -277,4 +293,5 @@ camera/
   board_config.h   Board selection, captive portal & logging options
   camera_pins.h    GPIO pin maps for all supported boards
   web_ui.h         Inlined HTML/CSS/JS served from PROGMEM
+  mockup.html      Development mockup of web UI (not included in firmware)
 ```

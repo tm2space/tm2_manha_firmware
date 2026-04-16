@@ -165,6 +165,7 @@ button:hover{border-color:var(--accent)}button:active{transform:scale(.97)}
           <div class="ota-row">
             <input type="file" id="ota-file" accept=".bin">
             <button class="btn-accent" id="ota-btn" onclick="otaUpload()">Upload &amp; Flash</button>
+            <button class="btn-danger btn-sm" id="ota-cancel" onclick="otaCancel()" style="display:none">Cancel</button>
           </div>
           <div class="progress-track" id="ota-progress"><div class="progress-fill" id="ota-bar"></div></div>
           <div class="ota-status" id="ota-status"></div>
@@ -214,7 +215,6 @@ button:hover{border-color:var(--accent)}button:active{transform:scale(.97)}
           <label><input type="checkbox" id="s-lenc"> Lens Corr</label>
           <label><input type="checkbox" id="s-hmirror"> H-Mirror</label>
           <label><input type="checkbox" id="s-vflip"> V-Flip</label>
-          <label><input type="checkbox" id="s-flash"> Flash</label>
         </div>
       </div>
       <div class="settings-actions">
@@ -262,7 +262,7 @@ let visibleCount=PAGE_SIZE;
 let logOffset=0,logPaused=false,logTimer=null,logLines=0;
 const RANGE_FIELDS=['quality','brightness','contrast','saturation','ae_level','agc_gain'];
 const SELECT_FIELDS=['framesize','gainceiling','wb_mode','special_effect'];
-const TOGGLE_FIELDS=['awb','awb_gain','aec','aec2','agc','bpc','wpc','raw_gma','lenc','hmirror','vflip','flash'];
+const TOGGLE_FIELDS=['awb','awb_gain','aec','aec2','agc','bpc','wpc','raw_gma','lenc','hmirror','vflip'];
 
 function status(msg,cls){let el=document.getElementById('status');el.textContent=msg;el.className=cls||'info'}
 async function apiFetch(path,opts){try{let r=await fetch(path,opts||{});if(!r.ok)throw new Error(await r.text()||r.statusText);return r}catch(e){status('Error: '+e.message,'err');throw e}}
@@ -329,19 +329,30 @@ async function pollLogs(){if(logPaused)return;try{let r=await apiFetch('/api/log
 async function clearLog(){try{await apiFetch('/api/logs',{method:'DELETE'})}catch(e){}logOffset=0;logLines=0;document.getElementById('log-term').textContent=''}
 function toggleLogPause(){logPaused=!logPaused;document.getElementById('log-pause-btn').textContent=logPaused?'Resume':'Pause'}
 
+var _otaXhr=null;
+function otaReset(){
+  var btn=document.getElementById('ota-btn'),cancel=document.getElementById('ota-cancel'),prog=document.getElementById('ota-progress'),bar=document.getElementById('ota-bar');
+  btn.disabled=false;cancel.style.display='none';prog.style.display='none';bar.style.width='0%';bar.style.background='var(--accent)';_otaXhr=null;
+}
+function otaCancel(){
+  if(_otaXhr){_otaXhr.abort();_otaXhr=null}
+  otaReset();
+  document.getElementById('ota-status').textContent='Upload cancelled';
+  status('Firmware upload cancelled','info');
+}
 async function otaUpload(){
   let fileInput=document.getElementById('ota-file');
   if(!fileInput.files.length){status('Select a .bin file first','err');return}
   if(!confirm('This will flash new firmware and reboot the camera. Continue?'))return;
-  let file=fileInput.files[0],btn=document.getElementById('ota-btn'),prog=document.getElementById('ota-progress'),bar=document.getElementById('ota-bar'),st=document.getElementById('ota-status');
-  btn.disabled=true;prog.style.display='block';bar.style.width='0%';bar.style.background='var(--accent)';st.textContent='Uploading... 0%';status('Flashing firmware...','info');
+  let file=fileInput.files[0],btn=document.getElementById('ota-btn'),cancel=document.getElementById('ota-cancel'),prog=document.getElementById('ota-progress'),bar=document.getElementById('ota-bar'),st=document.getElementById('ota-status');
+  btn.disabled=true;cancel.style.display='inline-block';prog.style.display='block';bar.style.width='0%';bar.style.background='var(--accent)';st.textContent='Uploading... 0%';status('Flashing firmware...','info');
   try{
-    let xhr=new XMLHttpRequest();xhr.open('POST','/api/ota',true);xhr.setRequestHeader('Content-Type','application/octet-stream');
+    var xhr=new XMLHttpRequest();_otaXhr=xhr;xhr.open('POST','/api/ota',true);xhr.setRequestHeader('Content-Type','application/octet-stream');
     xhr.upload.onprogress=function(e){if(e.lengthComputable){let pct=Math.round(e.loaded/e.total*100);bar.style.width=pct+'%';st.textContent='Uploading... '+pct+'%'}};
-    xhr.onload=function(){try{let d=JSON.parse(xhr.responseText);if(d.ok){bar.style.width='100%';bar.style.background='var(--success)';st.textContent='Done! Rebooting...';status('Firmware updated. Camera is rebooting...','ok')}else{bar.style.background='var(--danger)';st.textContent='Failed: '+(d.error||'unknown error');status('OTA failed: '+(d.error||'unknown'),'err');btn.disabled=false}}catch(e){st.textContent='Unexpected response';status('OTA error','err');btn.disabled=false}};
-    xhr.onerror=function(){bar.style.background='var(--danger)';st.textContent='Connection lost (may be rebooting)';status('Connection lost — camera may be rebooting','info')};
+    xhr.onload=function(){_otaXhr=null;cancel.style.display='none';try{let d=JSON.parse(xhr.responseText);if(d.ok){bar.style.width='100%';bar.style.background='var(--success)';st.textContent='Done! Rebooting...';status('Firmware updated. Camera is rebooting...','ok')}else{bar.style.background='var(--danger)';st.textContent='Failed: '+(d.error||'unknown error');status('OTA failed: '+(d.error||'unknown'),'err');btn.disabled=false}}catch(e){st.textContent='Unexpected response';status('OTA error','err');btn.disabled=false}};
+    xhr.onerror=function(){if(!_otaXhr)return;_otaXhr=null;cancel.style.display='none';bar.style.background='var(--danger)';st.textContent='Connection lost (may be rebooting)';status('Connection lost — camera may be rebooting','info')};
     xhr.send(file);
-  }catch(e){st.textContent='Error: '+e.message;status('OTA error: '+e.message,'err');btn.disabled=false}
+  }catch(e){otaReset();st.textContent='Error: '+e.message;status('OTA error: '+e.message,'err')}
 }
 
 async function loadStatus(){try{let r=await apiFetch('/api/status');let d=await r.json();let el;el=document.getElementById('sys-sd');if(el)el.textContent=d.sd?'OK':'No SD';if(el)el.className='info-value '+(d.sd?'ok':'warn');el=document.getElementById('sys-free');if(el)el.textContent=d.free_mb+' MB';el=document.getElementById('sys-images');if(el)el.textContent=d.images}catch(e){}}

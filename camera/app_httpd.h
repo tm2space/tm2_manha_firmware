@@ -42,7 +42,7 @@ struct CamSettings
     uint8_t lenc;           // 0/1 lens correction
     uint8_t hmirror;        // 0/1
     uint8_t vflip;          // 0/1
-    uint8_t flash;          // 0/1 LED on/off
+    uint8_t _spare[3];        // explicit 32-bit alignment (21 → 24 bytes)
 };
 
 struct Preset
@@ -51,9 +51,23 @@ struct Preset
     CamSettings s;
 };
 
-// ── Shared state ────────────────────────────────────────────────────────────
+// ── Runtime state ───────────────────────────────────────────────────────────
 
-extern bool sd_ok;
+struct HwState {
+    uint32_t image_counter;         // 4
+    SemaphoreHandle_t cam_mutex;    // 4  (pointer)
+    bool sd_ok;                     // 1
+    uint8_t _spare[3];               // explicit 32-bit alignment (9 → 12 bytes)
+};
+
+struct WebuiState {
+    unsigned long last_status_poll; // 4
+    unsigned long last_log_flush;   // 4
+    bool active;                    // 1
+    uint8_t _spare[3];               // explicit 32-bit alignment (9 → 12 bytes)
+};
+
+extern HwState hw;
 extern const char *IMAGE_DIR;
 extern CamSettings cam_settings;
 extern const Preset PRESETS[];

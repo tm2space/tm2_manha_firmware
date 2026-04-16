@@ -29,20 +29,6 @@
 #include <DNSServer.h>
 #endif
 
-// ── LED Flash (from CameraWebServer example) ───────────────────────────────
-#if defined(LED_GPIO_NUM)
-#include "esp32-hal-ledc.h"
-static int led_duty = 0;
-static void setup_led_flash()
-{
-    ledcAttach(LED_GPIO_NUM, 5000, 8);
-}
-static void enable_led(bool en)
-{
-    ledcWrite(LED_GPIO_NUM, en ? led_duty : 0);
-}
-#endif
-
 // ── Configuration ───────────────────────────────────────────────────────────
 
 static const char *AP_SSID   = "Manha-CAM";
@@ -68,21 +54,21 @@ static const bool SD_MMC_1BIT_MODE = true;
 static Preferences prefs;
 CamSettings cam_settings;
 
-static const uint8_t SETTINGS_VERSION = 1;
+static const uint8_t SETTINGS_VERSION = 2;  // bumped: CamSettings padded to 24 bytes
 
 // Named presets — index 0 is the default applied on first boot
 // Struct field order: framesize, quality, brightness, contrast, saturation,
 //   special_effect, wb_mode, awb, awb_gain, aec, aec2, ae_level,
 //   agc, agc_gain, gainceiling, bpc, wpc, raw_gma, lenc,
-//   hmirror, vflip, flash_duty
+//   hmirror, vflip
 //
 // gainceiling: 0=2x, 1=4x, 2=8x, 3=16x, 4=32x, 5=64x, 6=128x
 const Preset PRESETS[] = {
-    //                  fs               q  br  co  sa  fx wb  awb ag aec ae2 ael agc  ag gc bpc wpc gma len hm vf  fl
-    {"Default",      {FRAMESIZE_SVGA,  12,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0,   0}},
-    {"High Quality", {FRAMESIZE_UXGA,  10,  0,  1,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0,   0}},
-    {"Low Light",    {FRAMESIZE_SVGA,  12,  1,  0,  0,  0, 0,  1, 1,  1, 1,  1,  1, 20, 5,  1,  1,  1,  1, 0, 0, 1}},
-    {"Fast Capture", {FRAMESIZE_QVGA,  20,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0, 0}},
+    //                  fs               q  br  co  sa  fx wb  awb ag aec ae2 ael agc  ag gc bpc wpc gma len hm vf
+    {"Default",      {FRAMESIZE_SVGA,  12,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
+    {"High Quality", {FRAMESIZE_UXGA,  10,  0,  1,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
+    {"Low Light",    {FRAMESIZE_SVGA,  12,  1,  0,  0,  0, 0,  1, 1,  1, 1,  1,  1, 20, 5,  1,  1,  1,  1, 0, 0}},
+    {"Fast Capture", {FRAMESIZE_QVGA,  20,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
 };
 const int NUM_PRESETS = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -115,11 +101,8 @@ void apply_settings()
     s->set_hmirror(s, cam_settings.hmirror);
     s->set_vflip(s, cam_settings.vflip);
 
-#if defined(LED_GPIO_NUM)
-    led_duty = cam_settings.flash ? 255 : 0;
-#endif
-    log_send("[CAM] Settings applied (fs=%d q=%d flash=%d)\n", cam_settings.framesize,
-             cam_settings.quality, cam_settings.flash);
+    log_send("[CAM] Settings applied (fs=%d q=%d)\n", cam_settings.framesize,
+             cam_settings.quality);
 }
 
 void save_settings()
@@ -187,7 +170,6 @@ void camSettingsToJson(const CamSettings &cs, JsonObject obj)
     obj["lenc"]           = cs.lenc;
     obj["hmirror"]        = cs.hmirror;
     obj["vflip"]          = cs.vflip;
-    obj["flash"]          = cs.flash;
 }
 
 void jsonToCamSettings(JsonObject obj, CamSettings &cs)
@@ -213,7 +195,6 @@ void jsonToCamSettings(JsonObject obj, CamSettings &cs)
     cs.lenc           = obj["lenc"]           | cs.lenc;
     cs.hmirror        = obj["hmirror"]        | cs.hmirror;
     cs.vflip          = obj["vflip"]          | cs.vflip;
-    cs.flash          = obj["flash"]          | cs.flash;
 }
 
 void camInfoToJson(JsonObject obj)
@@ -257,10 +238,8 @@ void camInfoToJson(JsonObject obj)
 
 // ── Globals ─────────────────────────────────────────────────────────────────
 
-static uint32_t image_counter = 0;
-static SemaphoreHandle_t cam_mutex;
-bool sd_ok = false;
-static unsigned long last_log_flush = 0;
+HwState hw = {};
+static WebuiState webui = {};
 #if ENABLE_CAPTIVE_PORTAL
 static DNSServer dnsServer;
 #endif
@@ -281,11 +260,13 @@ static void ensure_image_dir();
 // ── Serial commands ──────────────────────────────────────────────────────────
 #define MANHA_CAM_CMD_CAPTURE       0x01  // -> ACK:<filename>\n or NACK:capture_failed\n
 #define MANHA_CAM_CMD_STATUS        0x02  // -> ACK:count=<N>\n
-#define MANHA_CAM_CMD_SET_SETTINGS  0x03  // key-value pairs + 0x00 terminator
-#define MANHA_CAM_CMD_GET_SETTINGS  0x04  // -> 0x04 + key-value pairs + 0x00\n
+#define MANHA_CAM_CMD_SET_SETTINGS  0x03  // count byte + key-value pairs (FLP)
+#define MANHA_CAM_CMD_GET_SETTINGS  0x04  // -> 0x04 + 21 key-value pairs (43 bytes FLP)
+#define MANHA_CAM_CMD_WEBUI_ON      0x05  // -> ACK:webui=on,ip=<IP>\n
+#define MANHA_CAM_CMD_WEBUI_OFF     0x06  // -> ACK:webui=off\n
 
 // ── Settings key mapping ─────────────────────────────────────────────────────
-// Keys are sequential: MANHA_CAM_CFG_FRAMESIZE (0x01) .. MANHA_CAM_CFG_FLASH (0x16).
+// Keys are sequential: MANHA_CAM_CFG_FRAMESIZE (0x01) .. MANHA_CAM_CFG_VFLIP (0x15).
 // Matches the field order in CamSettings.
 #define MANHA_CAM_CFG_FRAMESIZE     0x01
 #define MANHA_CAM_CFG_QUALITY       0x02
@@ -308,7 +289,6 @@ static void ensure_image_dir();
 #define MANHA_CAM_CFG_LENC          0x13
 #define MANHA_CAM_CFG_HMIRROR       0x14
 #define MANHA_CAM_CFG_VFLIP         0x15
-#define MANHA_CAM_CFG_FLASH         0x16
 
 static bool set_setting_by_key(uint8_t key, uint8_t val)
 {
@@ -335,7 +315,6 @@ static bool set_setting_by_key(uint8_t key, uint8_t val)
     case MANHA_CAM_CFG_LENC:           cam_settings.lenc           = val ? 1 : 0; break;
     case MANHA_CAM_CFG_HMIRROR:        cam_settings.hmirror        = val ? 1 : 0; break;
     case MANHA_CAM_CFG_VFLIP:          cam_settings.vflip          = val ? 1 : 0; break;
-    case MANHA_CAM_CFG_FLASH:          cam_settings.flash          = val ? 1 : 0; break;
     default:   return false;
     }
     return true;
@@ -366,7 +345,6 @@ static uint8_t get_setting_by_key(uint8_t key)
     case MANHA_CAM_CFG_LENC:           return cam_settings.lenc;
     case MANHA_CAM_CFG_HMIRROR:        return cam_settings.hmirror;
     case MANHA_CAM_CFG_VFLIP:          return cam_settings.vflip;
-    case MANHA_CAM_CFG_FLASH:          return cam_settings.flash;
     default:   return 0;
     }
 }
@@ -395,45 +373,47 @@ static void serial_cmd_poll()
     }
     case MANHA_CAM_CMD_STATUS:
     {
-        File root      = SDFS.open(IMAGE_DIR);
-        uint32_t count = 0;
-        if (root && root.isDirectory())
-        {
-            while (File f = root.openNextFile())
-            {
-                count++;
-                f.close();
-            }
-            root.close();
-        }
-        Serial.printf("ACK:count=%u\n", count);
+        webui.last_status_poll = millis();
+        // Use cached counter instead of scanning SD directory (285+ files = 2.5s)
+        Serial.printf("ACK:count=%u\n", (unsigned)hw.image_counter);
         break;
     }
     case MANHA_CAM_CMD_SET_SETTINGS:
     {
-        uint8_t buf[64];
-        int pos       = 0;
-        bool timed_out = false;
+        // Fixed-length payload: 1 byte count + count×2 data bytes (no terminator)
         unsigned long start = millis();
 
-        // Read key-value pairs until 0x00 terminator or timeout
-        while (millis() - start < 500)
+        // Wait for count byte
+        while (!Serial.available() && millis() - start < 500)
+            delay(1);
+        if (!Serial.available())
         {
-            if (!Serial.available())
-            {
-                delay(1);
-                continue;
-            }
-            uint8_t b = Serial.read();
-            if (b == 0x00)
-                break;
-            if (pos < (int)sizeof(buf))
-                buf[pos++] = b;
+            Serial.println("NACK:no_count");
+            break;
         }
 
-        if (pos < 2 || pos % 2 != 0)
+        uint8_t num_pairs = Serial.read();
+        if (num_pairs == 0 || num_pairs > 21)
         {
-            Serial.println("NACK:bad_payload");
+            Serial.printf("NACK:bad_count=%d\n", num_pairs);
+            break;
+        }
+
+        uint8_t buf[42]; // max 21 pairs × 2 bytes
+        int expected = num_pairs * 2;
+        int pos = 0;
+
+        while (pos < expected && millis() - start < 500)
+        {
+            if (Serial.available())
+                buf[pos++] = Serial.read();
+            else
+                delay(1);
+        }
+
+        if (pos != expected)
+        {
+            Serial.printf("NACK:short=%d/%d\n", pos, expected);
             break;
         }
 
@@ -450,14 +430,27 @@ static void serial_cmd_poll()
     }
     case MANHA_CAM_CMD_GET_SETTINGS:
     {
+        // Fixed-length response: echo + 21 key-value pairs (43 bytes total).
+        // No 0x00 terminator — Pico reads exactly 43 bytes.
         Serial.write(MANHA_CAM_CMD_GET_SETTINGS);
-        for (uint8_t key = MANHA_CAM_CFG_FRAMESIZE; key <= MANHA_CAM_CFG_FLASH; key++)
+        for (uint8_t key = MANHA_CAM_CFG_FRAMESIZE; key <= MANHA_CAM_CFG_VFLIP; key++)
         {
             Serial.write(key);
             Serial.write(get_setting_by_key(key));
         }
-        Serial.write(0x00);
-        Serial.println();
+        break;
+    }
+    case MANHA_CAM_CMD_WEBUI_ON:
+    {
+        webui_start();
+        IPAddress ip = WiFi.softAPIP();
+        Serial.printf("ACK:webui=on,ip=%s\n", ip.toString().c_str());
+        break;
+    }
+    case MANHA_CAM_CMD_WEBUI_OFF:
+    {
+        webui_stop();
+        Serial.println("ACK:webui=off");
         break;
     }
     default:
@@ -606,32 +599,25 @@ static void ensure_image_dir()
 static String next_filename()
 {
     char buf[32];
-    snprintf(buf, sizeof(buf), "/img_%05lu.jpg", (unsigned long)image_counter++);
+    snprintf(buf, sizeof(buf), "/img_%05lu.jpg", (unsigned long)hw.image_counter++);
     return String(IMAGE_DIR) + String(buf);
 }
 
 bool capture_and_save(String &out_filename)
 {
-    if (!sd_ok)
+    if (!hw.sd_ok)
     {
         log_send("[CAM] No SD\n");
         return false;
     }
-    xSemaphoreTake(cam_mutex, portMAX_DELAY);
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
 
-#if defined(LED_GPIO_NUM)
-    enable_led(true);
-    vTaskDelay(150 / portTICK_PERIOD_MS);
     camera_fb_t *fb = esp_camera_fb_get();
-    enable_led(false);
-#else
-    camera_fb_t *fb = esp_camera_fb_get();
-#endif
 
     if (!fb)
     {
         log_send("[CAM] fb_get failed\n");
-        xSemaphoreGive(cam_mutex);
+        xSemaphoreGive(hw.cam_mutex);
         return false;
     }
 
@@ -641,13 +627,13 @@ bool capture_and_save(String &out_filename)
     {
         log_send("[SD] open %s failed\n", out_filename.c_str());
         esp_camera_fb_return(fb);
-        xSemaphoreGive(cam_mutex);
+        xSemaphoreGive(hw.cam_mutex);
         return false;
     }
     size_t written = file.write(fb->buf, fb->len);
     file.close();
     esp_camera_fb_return(fb);
-    xSemaphoreGive(cam_mutex);
+    xSemaphoreGive(hw.cam_mutex);
     log_send("[CAM] %s (%u B)\n", out_filename.c_str(), (unsigned)written);
     return (written > 0);
 }
@@ -669,6 +655,31 @@ static void init_wifi_ap()
 }
 
 // ============================================================================
+// WebUI (WiFi AP + HTTP) control
+// ============================================================================
+static void webui_start()
+{
+    if (webui.active) return;
+    init_wifi_ap();
+#if ENABLE_CAPTIVE_PORTAL
+    dnsServer.start(53, "*", WiFi.softAPIP());
+#endif
+    start_http_server();
+    webui.active = true;
+}
+
+static void webui_stop()
+{
+    if (!webui.active) return;
+#if ENABLE_CAPTIVE_PORTAL
+    dnsServer.stop();
+#endif
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    webui.active = false;
+}
+
+// ============================================================================
 // Setup & Loop
 // ============================================================================
 void setup()
@@ -676,13 +687,11 @@ void setup()
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
     Serial.begin(115200);
-#if ENABLE_SERIAL_LOG
-    Serial.setDebugOutput(true);
-#endif
+    Serial.setDebugOutput(false);
 
     log_send("\n========= ESP32-CAM AP Server =========\n");
 
-    cam_mutex = xSemaphoreCreateMutex();
+    hw.cam_mutex = xSemaphoreCreateMutex();
 
     if (!init_camera())
     {
@@ -694,15 +703,11 @@ void setup()
     load_settings();
     apply_settings();
 
-#if defined(LED_GPIO_NUM)
-    setup_led_flash();
-#endif
-
-    sd_ok = init_sd();
-    if (!sd_ok)
+    hw.sd_ok = init_sd();
+    if (!hw.sd_ok)
         log_send("[WARN] SD not available - capture will fail\n");
 
-    if (sd_ok)
+    if (hw.sd_ok)
     {
         File root = SDFS.open(IMAGE_DIR);
         if (root && root.isDirectory())
@@ -713,8 +718,8 @@ void setup()
                 if (n.startsWith("img_") && n.endsWith(".jpg"))
                 {
                     long num = n.substring(4, n.length() - 4).toInt();
-                    if ((uint32_t)num >= image_counter)
-                        image_counter = num + 1;
+                    if ((uint32_t)num >= hw.image_counter)
+                        hw.image_counter = num + 1;
                 }
                 f.close();
             }
@@ -722,26 +727,31 @@ void setup()
         }
     }
 
-    init_wifi_ap();
-#if ENABLE_CAPTIVE_PORTAL
-    dnsServer.start(53, "*", WiFi.softAPIP());
-#endif
-    start_http_server();
-
-    log_send("[INIT] Ready.\n");
+    // Boot in flight mode — no WiFi/HTTP. Send 0x05 via UART to enable.
+    webui.last_status_poll = millis();
+    log_send("[INIT] Ready (flight mode).\n");
 }
 
 void loop()
 {
 #if ENABLE_CAPTIVE_PORTAL
-    dnsServer.processNextRequest();
+    if (webui.active)
+        dnsServer.processNextRequest();
 #endif
     serial_cmd_poll();
 
-    if (millis() - last_log_flush >= LOG_FLUSH_FREQ_MS)
+    // Watchdog: auto-start WebUI if Pico stops polling STATUS
+    if (!webui.active && millis() - webui.last_status_poll >= STATUS_WATCHDOG_MS)
+    {
+        log_send("[WDG] STATUS not polled for %ds, starting WebUI\n",
+                 STATUS_WATCHDOG_MS / 1000);
+        webui_start();
+    }
+
+    if (webui.active && millis() - webui.last_log_flush >= LOG_FLUSH_FREQ_MS)
     {
         log_flush();
-        last_log_flush = millis();
+        webui.last_log_flush = millis();
     }
 
     delay(10);

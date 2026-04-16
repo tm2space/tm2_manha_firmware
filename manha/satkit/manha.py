@@ -21,7 +21,7 @@ from manha.internals.drivers import (
     UVS12SD,
 )
 from .lora import LoRa
-from . import i2c
+from . import i2c, uart, gpio
 
 from manha.config import *
 from .constants import *
@@ -32,6 +32,21 @@ class MANHA:
     def i2c(self):
         """Get I2C Instance"""
         return i2c.m_i2c
+
+    @property
+    def uart0(self):
+        """Get UART0 Instance"""
+        return uart.m_uart0
+
+    @property
+    def gp1(self):
+        """Get GP1 pin number"""
+        return gpio.GP1_PIN
+
+    @property
+    def gp2(self):
+        """Get GP2 pin number"""
+        return gpio.GP2_PIN
 
     def __init__(self, lora_address_to=LORA_ADDR, lora_address_self=LORA_ADDR):
         """Initialize the MANHA satellite control system
@@ -80,6 +95,7 @@ class MANHA:
         self.led = machine.Pin("LED", machine.Pin.OUT)
 
         i2c.init_i2c()
+        uart.init_uart()
         gc.collect()
 
         self.led_matrix = LEDMatrix(8, 8, 3)
@@ -127,6 +143,7 @@ class MANHA:
         self.add_command("CAM", self._cmd_cam)
         self.add_command("CAMSET", self._cmd_camset)
         self.add_command("CAMGET", self._cmd_camget)
+        self.add_command("WEBUI", self._cmd_webui)
 
     def _cmd_ping(self, command, sender_addr):
         """Handle PING command"""
@@ -177,7 +194,7 @@ class MANHA:
             if not hasattr(self, "_hdrm"):
                 from manha.satkit.peripherals import MHDRM
 
-                self._hdrm = MHDRM()
+                self._hdrm = MHDRM(self.gp1)
             if hdrm_val == 1:
                 self._hdrm.release()
                 return "HDRM released"
@@ -198,27 +215,29 @@ class MANHA:
             if not hasattr(self, "_cam"):
                 from manha.satkit.peripherals import ManhaCam
 
-                self._cam = ManhaCam()
+                self._cam = ManhaCam(self.uart0)
             if val == 1:
-                fname = self._cam.capture()
-                return f"CAM:{fname}" if fname else "CAM:FAIL"
+                fname, err = self._cam.capture()
+                return f"CAM:{fname}" if fname else f"CAM:FAIL({err})"
             else:
                 data = self._cam.read()
+                if "error" in data:
+                    return f"CAM:FAIL({data['error']})"
                 return f"CAM:count={data['cam_count']}"
         except (IndexError, ValueError) as e:
             return f"Command format error: {e}"
 
     def _cmd_camset(self, command, sender_addr):
-        """Handle CAMSET=02:0A,16:01 command - set camera settings via hex key:value pairs"""
+        """Handle CAMSET=02:0A,14:01 command - set camera settings via hex key:value pairs"""
         try:
             if not ENABLE_CAM:
                 return "CAM not enabled"
             if not hasattr(self, "_cam"):
                 from manha.satkit.peripherals import ManhaCam
 
-                self._cam = ManhaCam()
+                self._cam = ManhaCam(self.uart0)
             # Parse hex key:value pairs from command
-            # Format: CAMSET=02:0A,16:01
+            # Format: CAMSET=02:0A,14:01
             pairs = command.split("=")[1].split(",")
             raw = b""
             for pair in pairs:
@@ -237,16 +256,33 @@ class MANHA:
             if not hasattr(self, "_cam"):
                 from manha.satkit.peripherals import ManhaCam
 
-                self._cam = ManhaCam()
+                self._cam = ManhaCam(self.uart0)
             raw = self._cam.read_settings()
             if raw is None or len(raw) < 2:
                 return "CAMGET:FAIL"
-            # Format raw bytes as hex key:value pairs
+            # Format raw bytes as hex key:value pairs (truncate to even length)
+            count = len(raw) // 2
             pairs = []
-            for i in range(0, len(raw), 2):
-                pairs.append(f"{raw[i]:02X}:{raw[i + 1]:02X}")
+            for i in range(count):
+                pairs.append(f"{raw[i * 2]:02X}:{raw[i * 2 + 1]:02X}")
             return "CAMGET:" + ",".join(pairs)
         except Exception as e:
+            return f"Command format error: {e}"
+
+    def _cmd_webui(self, command, sender_addr):
+        """Handle WEBUI=<0/1> command - toggle ESP32-CAM WiFi AP + HTTP server"""
+        try:
+            if not ENABLE_CAM:
+                return "CAM not enabled"
+            val = int(command.split("=")[1])
+            if not hasattr(self, "_cam"):
+                from manha.satkit.peripherals import ManhaCam
+                self._cam = ManhaCam(self.uart0)
+            if val == 1:
+                return self._cam.webui_on()
+            else:
+                return self._cam.webui_off()
+        except (IndexError, ValueError) as e:
             return f"Command format error: {e}"
 
     def add_command(self, command_name: str, callback) -> None:
@@ -254,10 +290,10 @@ class MANHA:
 
         Args:
             command_name: The name of the command (string)
-            callback: The function to call when the command is received
+            callback: The function to call when the command is received.
+                      Can be sync or async — dispatch auto-detects.
         """
-        is_async = str(type(callback)) == "<class 'generator'>"
-        self.commands[command_name] = (callback, is_async)
+        self.commands[command_name] = (callback, False)
 
     def remove_command(self, command_name: str) -> None:
         """Remove a command from the command registry.
@@ -393,7 +429,7 @@ class MANHA:
                     if not hasattr(self, "_hdrm"):
                         from manha.satkit.peripherals import MHDRM
 
-                        self._hdrm = MHDRM()
+                        self._hdrm = MHDRM(self.gp1)
                     return self._hdrm.read()
                 except:
                     return {"hdrm": -1}
@@ -407,23 +443,22 @@ class MANHA:
 
         # Camera setup (guarded by config flag)
         if ENABLE_CAM:
-
-            def read_cam():
-                try:
-                    if not hasattr(self, "_cam"):
-                        from manha.satkit.peripherals import ManhaCam
-
-                        self._cam = ManhaCam()
-                    return self._cam.read()
-                except:
-                    return {"cam_count": -1}
-
             try:
+                from manha.satkit.peripherals import ManhaCam
+
+                self._cam = ManhaCam(self.uart0)
+                print(f"ManhaCam: {self._cam.probe()}")
+
+                def read_cam():
+                    try:
+                        return self._cam.read()
+                    except Exception as e:
+                        return {"cam_count": -1, "error": str(e)}
+
                 self.add_sensor(read_cam, essential=False)
-                print("ManhaCam OK")
                 gc.collect()
-            except:
-                print("ManhaCam failed")
+            except Exception as e:
+                print(f"ManhaCam failed: {e}")
 
         # final_memory = gc.mem_free()
         # print(f"Sensor setup complete - Free memory: {final_memory}")
@@ -500,9 +535,13 @@ class MANHA:
             cmd_key = command.split("=")[0] if "=" in command else command
 
             if cmd_key in self.commands:
-                handler, is_async = self.commands[cmd_key]
+                handler, _ = self.commands[cmd_key]
                 result = handler(command, sender_addr)
-                response = await result if is_async else result
+                # async def returns a coroutine — await it
+                if hasattr(result, 'send'):
+                    response = await result
+                else:
+                    response = result
             else:
                 response = f"Unknown command: {command}"
 
@@ -610,6 +649,11 @@ class MANHA:
 
                     except Exception:
                         print(f"Sensor error: essential {i}")
+
+                # Keep ESP32-CAM watchdog alive even in LPM
+                if ENABLE_CAM and self.low_power_mode and hasattr(self, "_cam"):
+                    if self._cam.needs_keepalive:
+                        self._cam.keepalive()
 
                 # Read non-essential sensors if not in low power mode
                 if not self.low_power_mode:
@@ -801,7 +845,7 @@ class MANHA:
 
                 # Listen for commands for remaining time in TM interval
                 elapsed = time.ticks_diff(time.ticks_ms(), last_telemetry_time)
-                listen_time = max(50, self._sensor_read_interval - elapsed - 50)
+                listen_time = max(MIN_CMD_LISTEN_MS, self._sensor_read_interval - elapsed - 50)
                 await self._listen_for_commands(listen_time)
 
             except MemoryError:

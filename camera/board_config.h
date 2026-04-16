@@ -6,7 +6,7 @@
 //            Ensure ESP32 Wrover Module or other board with PSRAM is selected
 //            Partial images will be transmitted if image exceeds buffer size
 //
-//            You must select partition scheme from the board menu that has at least 3MB APP space.
+//            Use Minimal SPIFFS (1.9MB APP with OTA) partition scheme for OTA support.
 
 // ===================
 // Select camera model
@@ -31,10 +31,13 @@
 //#define CAMERA_MODEL_DFRobot_Romeo_ESP32S3        // Has PSRAM
 
 // ── Captive Portal ──────────────────────────────────────────────────────────
-#define ENABLE_CAPTIVE_PORTAL 1       // 1 = auto-open web UI on AP connect, 0 = disabled
+#define ENABLE_CAPTIVE_PORTAL 0       // 1 = auto-open web UI on AP connect, 0 = disabled
+
+// ── Watchdog ────────────────────────────────────────────────────────────────
+#define STATUS_WATCHDOG_MS  30000     // auto-start WebUI if STATUS not polled within this window
 
 // ── Logging ─────────────────────────────────────────────────────────────────
-#define ENABLE_SERIAL_LOG  1          // 1 = LOG_SERIAL writes to UART, 0 = silent
+#define ENABLE_SERIAL_LOG  0          // 1 = LOG_SERIAL writes to UART, 0 = silent
 #define LOG_FILE           "/logs.txt"
 #define MAX_LOG_BYTES      16384      // max log file size before truncation
 #define LOG_BUF_SIZE       512        // RAM buffer, flushed to SD periodically

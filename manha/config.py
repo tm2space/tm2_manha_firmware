@@ -4,6 +4,7 @@ LORA_ADDR = const(11)
 LOW_POWER_THRESHOLD = const(35)  # Battery % below which Low-Power Mode activates
 TELEMETRY_INTERVAL_MS = const(1000)  # ms between TLM packets
 LOW_POWER_TELEMETRY_INTERVAL_MS = const(5000)  # ms between TLM in Low-Power Mode
+MIN_CMD_LISTEN_MS = const(500)  # minimum RX window for incoming commands
 
 # Set True for legacy JSON packetization (deprecated).
 USE_LEGACY_PACKETIZATION = False
