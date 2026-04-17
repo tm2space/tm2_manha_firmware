@@ -57,7 +57,8 @@ struct HwState {
     uint32_t image_counter;         // 4
     SemaphoreHandle_t cam_mutex;    // 4  (pointer)
     bool sd_ok;                     // 1
-    uint8_t _spare[3];               // explicit 32-bit alignment (9 → 12 bytes)
+    bool cam_powered;               // 1  (true = OV2640 out of PWDN)
+    uint8_t _spare[2];               // explicit 32-bit alignment (10 → 12 bytes)
 };
 
 struct WebuiState {

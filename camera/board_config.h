@@ -42,6 +42,13 @@
 #define MAX_LOG_BYTES      16384      // max log file size before truncation
 #define LOG_BUF_SIZE       512        // RAM buffer, flushed to SD periodically
 
+// ── Power management ───────────────────────────────────────────────────────
+#define CPU_FREQ_MAX_MHZ        240   // peak CPU freq (capture / HTTP active)
+#define CPU_FREQ_MIN_MHZ        40    // idle CPU freq with DFS
+#define CAM_IDLE_PWDN_DELAY_MS  10    // settle after sensor PWDN LOW before SCCB
+#define IDLE_LOOP_DELAY_MS      50    // loop() delay when webui inactive
+#define BUSY_LOOP_DELAY_MS      10    // loop() delay when webui active
+
 #include "camera_pins.h"
 
 #endif  // BOARD_CONFIG_H

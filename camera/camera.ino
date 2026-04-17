@@ -20,6 +20,8 @@
 #include <time.h>
 #include "soc/soc.h"          // WRITE_PERI_REG / brownout
 #include "soc/rtc_cntl_reg.h" // RTC_CNTL_BROWN_OUT_REG
+#include "esp_pm.h"           // DFS (dynamic frequency scaling)
+#include "driver/gpio.h"      // direct PWDN drive
 
 #include <Preferences.h>
 
@@ -603,6 +605,26 @@ static String next_filename()
     return String(IMAGE_DIR) + String(buf);
 }
 
+// Sensor power-gate helpers. Both must be called with hw.cam_mutex held
+// (or during single-threaded boot).
+static void cam_sensor_power_down_locked()
+{
+    if (!hw.cam_powered) return;
+    digitalWrite(PWDN_GPIO_NUM, HIGH);
+    hw.cam_powered = false;
+    log_send("[CAM] PWDN down\n");
+}
+
+static void cam_sensor_power_up_locked()
+{
+    if (hw.cam_powered) return;
+    digitalWrite(PWDN_GPIO_NUM, LOW);
+    delay(CAM_IDLE_PWDN_DELAY_MS);
+    apply_settings();
+    hw.cam_powered = true;
+    log_send("[CAM] PWDN up, resettled\n");
+}
+
 bool capture_and_save(String &out_filename)
 {
     if (!hw.sd_ok)
@@ -612,11 +634,14 @@ bool capture_and_save(String &out_filename)
     }
     xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
 
+    cam_sensor_power_up_locked();
+
     camera_fb_t *fb = esp_camera_fb_get();
 
     if (!fb)
     {
         log_send("[CAM] fb_get failed\n");
+        cam_sensor_power_down_locked();
         xSemaphoreGive(hw.cam_mutex);
         return false;
     }
@@ -627,12 +652,14 @@ bool capture_and_save(String &out_filename)
     {
         log_send("[SD] open %s failed\n", out_filename.c_str());
         esp_camera_fb_return(fb);
+        cam_sensor_power_down_locked();
         xSemaphoreGive(hw.cam_mutex);
         return false;
     }
     size_t written = file.write(fb->buf, fb->len);
     file.close();
     esp_camera_fb_return(fb);
+    cam_sensor_power_down_locked();
     xSemaphoreGive(hw.cam_mutex);
     log_send("[CAM] %s (%u B)\n", out_filename.c_str(), (unsigned)written);
     return (written > 0);
@@ -661,6 +688,8 @@ static void webui_start()
 {
     if (webui.active) return;
     init_wifi_ap();
+    WiFi.setSleep(WIFI_PS_MIN_MODEM);
+    log_send("[WiFi] modem sleep ON\n");
 #if ENABLE_CAPTIVE_PORTAL
     dnsServer.start(53, "*", WiFi.softAPIP());
 #endif
@@ -677,6 +706,19 @@ static void webui_stop()
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     webui.active = false;
+}
+
+static void power_mgmt_init()
+{
+    esp_pm_config_esp32_t cfg = {
+        .max_freq_mhz = CPU_FREQ_MAX_MHZ,
+        .min_freq_mhz = CPU_FREQ_MIN_MHZ,
+        .light_sleep_enable = false,
+    };
+    if (esp_pm_configure(&cfg) != ESP_OK)
+        log_send("[PM] DFS unavailable\n");
+    else
+        log_send("[PM] DFS %d-%d MHz\n", CPU_FREQ_MIN_MHZ, CPU_FREQ_MAX_MHZ);
 }
 
 // ============================================================================
@@ -702,6 +744,10 @@ void setup()
 
     load_settings();
     apply_settings();
+
+    // Boot-time: sensor is up after init_camera/apply_settings. Park it.
+    hw.cam_powered = true;
+    cam_sensor_power_down_locked();
 
     hw.sd_ok = init_sd();
     if (!hw.sd_ok)
@@ -729,6 +775,7 @@ void setup()
 
     // Boot in flight mode — no WiFi/HTTP. Send 0x05 via UART to enable.
     webui.last_status_poll = millis();
+    power_mgmt_init();
     log_send("[INIT] Ready (flight mode).\n");
 }
 
@@ -754,5 +801,5 @@ void loop()
         webui.last_log_flush = millis();
     }
 
-    delay(10);
+    delay(webui.active ? BUSY_LOOP_DELAY_MS : IDLE_LOOP_DELAY_MS);
 }
