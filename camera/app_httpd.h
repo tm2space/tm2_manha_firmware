@@ -54,11 +54,12 @@ struct Preset
 // ── Runtime state ───────────────────────────────────────────────────────────
 
 struct HwState {
-    uint32_t image_counter;         // 4
+    uint32_t name_counter;          // 4  monotonic filename slot (img_NNNNN.jpg)
+    uint32_t image_count;           // 4  actual files on SD in IMAGE_DIR
     SemaphoreHandle_t cam_mutex;    // 4  (pointer)
     bool sd_ok;                     // 1
     bool cam_powered;               // 1  (true = OV2640 out of PWDN)
-    uint8_t _spare[2];               // explicit 32-bit alignment (10 → 12 bytes)
+    uint8_t _spare[2];               // explicit 32-bit alignment (14 → 16 bytes)
 };
 
 struct WebuiState {

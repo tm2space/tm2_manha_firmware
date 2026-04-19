@@ -30,6 +30,15 @@
 //#define CAMERA_MODEL_DFRobot_FireBeetle2_ESP32S3  // Has PSRAM
 //#define CAMERA_MODEL_DFRobot_Romeo_ESP32S3        // Has PSRAM
 
+// ── WiFi AP ─────────────────────────────────────────────────────────────────
+#define AP_SSID         "Manha-CAM"
+#define AP_PASS         "space1234"
+#define AP_MAX_CONN     4
+
+// ── mDNS ────────────────────────────────────────────────────────────────────
+#define ENABLE_MDNS     1             // 1 = advertise http://<MDNS_HOSTNAME>.local/, 0 = disabled
+#define MDNS_HOSTNAME   "manha-cam"   // http://manha-cam.local/
+
 // ── Captive Portal ──────────────────────────────────────────────────────────
 #define ENABLE_CAPTIVE_PORTAL 0       // 1 = auto-open web UI on AP connect, 0 = disabled
 
@@ -48,6 +57,8 @@
 #define CAM_IDLE_PWDN_DELAY_MS  10    // settle after sensor PWDN LOW before SCCB
 #define IDLE_LOOP_DELAY_MS      50    // loop() delay when webui inactive
 #define BUSY_LOOP_DELAY_MS      10    // loop() delay when webui active
+#define UART_WAKE_THRESHOLD     3     // UART0 RX positive edges to wake CPU
+#define WAKE_PREP_TIMEOUT_MS    2000  // auto-park sensor if CAPTURE doesn't follow WAKE_PREP
 
 #include "camera_pins.h"
 

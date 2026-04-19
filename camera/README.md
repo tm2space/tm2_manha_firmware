@@ -192,18 +192,53 @@ comfortably. Do **not** use Huge APP, which has no OTA slot.
 
 ## Serial Command Interface (Satkit Integration)
 
-The ESP32-CAM listens for single-byte commands on **Serial (UART0, 115200
-baud)**. This is how the Satkit Pico triggers captures and queries status.
+The ESP32-CAM listens on **Serial (UART0, 115200 baud)** using a framed
+binary protocol. The `0xAA` preamble also wakes the ESP from light sleep
+(UART RX threshold = 3 edges); the preamble byte is consumed by the wake
+machinery, the rest of the frame arrives cleanly into the RX FIFO.
 
-| Byte   | Command      | Payload              | Response                                     |
-|--------|--------------|----------------------|----------------------------------------------|
-| `0x01` | CAPTURE      | —                    | `ACK:<filename>\n` or `NACK:capture_failed\n` |
-| `0x02` | STATUS       | —                    | `ACK:count=<N>\n`                             |
-| `0x03` | SET_SETTINGS | key-value pairs + `0x00` | `ACK:settings=<N>\n` or `NACK:<reason>\n` |
-| `0x04` | GET_SETTINGS | —                    | `0x04` + key-value pairs + `0x00\n`           |
-| `0x05` | WEBUI_ON     | —                    | `ACK:webui=on,ip=<IP>\n`                      |
-| `0x06` | WEBUI_OFF    | —                    | `ACK:webui=off\n`                             |
-| other  | unknown      | —                    | `NACK:unknown_cmd=0xNN\n`                     |
+### Frame layout
+
+```
+┌──────────┬──────┬─────┬──────┬─────────────────┬─────────────┐
+│ PREAMBLE │ SYNC │ LEN │ TYPE │   PAYLOAD 0..N  │  CRC32 LE   │
+│   0xAA   │ 0x55 │ 1B  │  1B  │    0..255 B     │     4B      │
+└──────────┴──────┴─────┴──────┴─────────────────┴─────────────┘
+       4-byte header                                 4-byte trailer
+```
+
+- `LEN` = payload byte count (0–255), excludes header/CRC.
+- `TYPE` = opcode (request) or `opcode | 0x80` (ACK) / `opcode | 0xC0` (NACK).
+- `CRC32` = zlib/Ethernet CRC-32 little-endian over `[PREAMBLE..PAYLOAD]`.
+  Matches Python `binascii.crc32` and ESP `esp_crc32_le(0, buf, 4+LEN)`.
+- Overhead = 8 bytes, 32-bit aligned.
+
+### Opcodes
+
+| Type   | Command      | Request payload          | ACK payload                    |
+|--------|--------------|--------------------------|--------------------------------|
+| `0x01` | CAPTURE      | —                        | filename bytes (UTF-8)         |
+| `0x02` | STATUS       | —                        | `u32_le` image counter         |
+| `0x03` | SET_SETTINGS | count `u8` + count×2 KV  | `u8` applied count             |
+| `0x04` | GET_SETTINGS | —                        | 21 KV pairs (42 B)             |
+| `0x05` | WEBUI_ON     | —                        | IP as 4 bytes                  |
+| `0x06` | WEBUI_OFF    | —                        | —                              |
+| `0x08` | WAKE_PREP    | —                        | —                              |
+
+`WAKE_PREP` asks the ESP to bring the OV2640 sensor out of PWDN in
+advance of a CAPTURE — call it ~300 ms before `CAPTURE` to remove the
+sensor reinit cost from the hot path.
+
+### NACK error codes
+
+NACK response carries a 1-byte error code:
+
+| Code   | Meaning        |
+|--------|----------------|
+| `0x01` | unknown_cmd    |
+| `0x02` | bad_payload    |
+| `0x03` | capture_failed |
+| `0x04` | bad_count      |
 
 ### Binary Settings Key IDs
 
@@ -234,26 +269,31 @@ single unsigned bytes (signed fields like brightness use two's complement).
 | `0x14` | hmirror        | bool  | 0/1        |
 | `0x15` | vflip          | bool  | 0/1        |
 
-Example — set JPEG quality to 10:
+Example — set JPEG quality to 10. Frame = header + payload + CRC32:
 ```
-TX: 0x03 0x02 0x0A 0x00
-     cmd  key  val  end
-RX: ACK:settings=1\n
+PREAMBLE SYNC LEN TYPE | COUNT KEY VAL | CRC32(le)
+  0xAA   0x55 0x03 0x03 |  0x01 0x02 0x0A | XX XX XX XX
+
+ACK response:
+  0xAA   0x55 0x01 0x83 |  0x01            | XX XX XX XX
+                         applied count = 1
 ```
 
 ### Satkit Peripheral
 
 On the Pico side, the `ManhaCam` satkit peripheral
-(`manha/satkit/peripherals/camera.py`) wraps this protocol:
+(`manha/satkit/peripherals/camera.py`) wraps this protocol and hides all
+framing / CRC details:
 
 ```python
 from manha.satkit.peripherals import ManhaCam
 
-cam = ManhaCam()                      # UART1, TX=4, RX=5, 115200 baud
-data = cam.read()                     # {"cam_count": N}
-fname = cam.capture()                 # "/images/img_00042.jpg" or None
-cam.configure_remote(b'\x02\x0A')     # set quality=10 (raw bytes passthrough)
-raw = cam.read_settings()             # raw binary key-value pairs (44 bytes)
+cam = ManhaCam(uart)                        # pass a preconfigured UART
+data = cam.read()                           # {"cam_count": N}
+cam.wake_prep(); time.sleep_ms(300)         # optional: warm sensor
+fname, err = cam.capture()                  # "/images/img_00042.jpg" or None
+cam.configure_remote(b'\x02\x0A')           # set quality=10 (raw bytes passthrough)
+raw = cam.read_settings()                   # 42 bytes = 21 KV pairs
 ```
 
 Enable automatic telemetry reporting by setting `ENABLE_CAM = True` in

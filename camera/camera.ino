@@ -21,7 +21,10 @@
 #include "soc/soc.h"          // WRITE_PERI_REG / brownout
 #include "soc/rtc_cntl_reg.h" // RTC_CNTL_BROWN_OUT_REG
 #include "esp_pm.h"           // DFS (dynamic frequency scaling)
+#include "esp_sleep.h"        // light sleep wake sources
 #include "driver/gpio.h"      // direct PWDN drive
+#include "driver/uart.h"      // UART wake threshold
+#include "esp_crc.h"          // esp_crc32_le for frame CRC
 
 #include <Preferences.h>
 
@@ -31,12 +34,11 @@
 #include <DNSServer.h>
 #endif
 
-// ── Configuration ───────────────────────────────────────────────────────────
+#if ENABLE_MDNS
+#include <ESPmDNS.h>
+#endif
 
-static const char *AP_SSID   = "Manha-CAM";
-static const char *AP_PASS   = "space1234";
-static const int AP_CHANNEL  = 6;
-static const int AP_MAX_CONN = 4;
+// ── Configuration ───────────────────────────────────────────────────────────
 
 const char *IMAGE_DIR = "/images";
 
@@ -242,6 +244,11 @@ void camInfoToJson(JsonObject obj)
 
 HwState hw = {};
 static WebuiState webui = {};
+
+// Tracks WAKE_PREP deadline. Non-zero => sensor is held awake pending
+// a follow-up CAPTURE; loop() auto-parks the sensor after
+// WAKE_PREP_TIMEOUT_MS to avoid a stuck-on drain.
+static unsigned long wake_prep_deadline_ms = 0;
 #if ENABLE_CAPTIVE_PORTAL
 static DNSServer dnsServer;
 #endif
@@ -257,15 +264,49 @@ static void ensure_image_dir();
 // ============================================================================
 // Serial Command Interface
 // ============================================================================
-// Protocol: Satkit Pico sends 1-byte commands on Serial (UART0).
+// Framed protocol on Serial (UART0) between Pico (satkit) and ESP32-CAM.
+//
+// Frame layout (32-bit aligned, 8-byte overhead):
+//   [PREAMBLE 0xAA][SYNC 0x55][LEN 1B][TYPE 1B]    // 4-byte header
+//   [PAYLOAD  0..255 B]
+//   [CRC32_LE 4B]                                  // 4-byte trailer
+//
+// CRC32 = esp_crc32_le(0, &frame[1], 3 + LEN)  — CRC covers [SYNC..PAYLOAD]
+// and EXCLUDES the PREAMBLE byte. Matches Python binascii.crc32.
+//
+// PREAMBLE (0xAA) is the UART light-sleep wake byte. Because the wake
+// machinery may drop or garble this byte during the DFS clock ramp, the
+// receiver syncs on SYNC (0x55) instead of PREAMBLE and the CRC does not
+// cover PREAMBLE. The PREAMBLE is still transmitted every frame to trigger
+// the UART RX wake threshold.
+//
+// Response TYPE = request TYPE | 0x80 (ACK) or | 0xC0 (NACK). NACK payload is
+// a 1-byte error code (see FR_ERR_* constants).
 
-// ── Serial commands ──────────────────────────────────────────────────────────
-#define MANHA_CAM_CMD_CAPTURE       0x01  // -> ACK:<filename>\n or NACK:capture_failed\n
-#define MANHA_CAM_CMD_STATUS        0x02  // -> ACK:count=<N>\n
-#define MANHA_CAM_CMD_SET_SETTINGS  0x03  // count byte + key-value pairs (FLP)
-#define MANHA_CAM_CMD_GET_SETTINGS  0x04  // -> 0x04 + 21 key-value pairs (43 bytes FLP)
-#define MANHA_CAM_CMD_WEBUI_ON      0x05  // -> ACK:webui=on,ip=<IP>\n
-#define MANHA_CAM_CMD_WEBUI_OFF     0x06  // -> ACK:webui=off\n
+// ── Frame constants ─────────────────────────────────────────────────────────
+#define FR_PREAMBLE        0xAA
+#define FR_SYNC            0x55
+#define FR_ACK_BIT         0x80
+#define FR_NACK_BIT        0xC0
+#define FR_MAX_PAYLOAD     255
+#define FR_HEADER_LEN      4
+#define FR_CRC_LEN         4
+#define FR_CRC_BODY_OFF    1      // CRC starts at tx[1] (after PREAMBLE)
+
+// ── Request opcodes ─────────────────────────────────────────────────────────
+#define MANHA_CAM_CMD_CAPTURE       0x01  // -> ACK payload: filename bytes (UTF-8)
+#define MANHA_CAM_CMD_STATUS        0x02  // -> ACK payload: u32_le image_count (files on SD)
+#define MANHA_CAM_CMD_SET_SETTINGS  0x03  // req payload: count + count*2 KV bytes -> ACK: applied u8
+#define MANHA_CAM_CMD_GET_SETTINGS  0x04  // -> ACK payload: 21 pairs (42 bytes)
+#define MANHA_CAM_CMD_WEBUI_ON      0x05  // -> ACK payload: ip as 4 bytes
+#define MANHA_CAM_CMD_WEBUI_OFF     0x06  // -> ACK payload: empty
+#define MANHA_CAM_CMD_WAKE_PREP     0x08  // -> ACK payload: empty (sensor brought out of PWDN)
+
+// ── NACK error codes ────────────────────────────────────────────────────────
+#define FR_ERR_UNKNOWN_CMD  0x01
+#define FR_ERR_BAD_PAYLOAD  0x02
+#define FR_ERR_CAPTURE      0x03
+#define FR_ERR_BAD_COUNT    0x04
 
 // ── Settings key mapping ─────────────────────────────────────────────────────
 // Keys are sequential: MANHA_CAM_CFG_FRAMESIZE (0x01) .. MANHA_CAM_CFG_VFLIP (0x15).
@@ -351,119 +392,211 @@ static uint8_t get_setting_by_key(uint8_t key)
     }
 }
 
-static void serial_cmd_poll()
+// ── Frame send helper ───────────────────────────────────────────────────────
+static void send_framed(uint8_t type, const uint8_t *payload, uint8_t len)
 {
-    if (!Serial.available())
-        return;
-    uint8_t cmd = Serial.read();
+    // Buffer: 4 header + 255 payload + 4 CRC = 263 max
+    static uint8_t tx[FR_HEADER_LEN + FR_MAX_PAYLOAD + FR_CRC_LEN];
+    tx[0] = FR_PREAMBLE;
+    tx[1] = FR_SYNC;
+    tx[2] = len;
+    tx[3] = type;
+    if (len > 0 && payload)
+        memcpy(tx + FR_HEADER_LEN, payload, len);
 
-    switch (cmd)
+    // CRC excludes PREAMBLE (tx[0]) — it may not survive the UART wake path.
+    uint32_t crc = esp_crc32_le(0, tx + FR_CRC_BODY_OFF,
+                                FR_HEADER_LEN - FR_CRC_BODY_OFF + len);
+    tx[FR_HEADER_LEN + len + 0] = (uint8_t)(crc & 0xFF);
+    tx[FR_HEADER_LEN + len + 1] = (uint8_t)((crc >> 8) & 0xFF);
+    tx[FR_HEADER_LEN + len + 2] = (uint8_t)((crc >> 16) & 0xFF);
+    tx[FR_HEADER_LEN + len + 3] = (uint8_t)((crc >> 24) & 0xFF);
+
+    Serial.write(tx, FR_HEADER_LEN + len + FR_CRC_LEN);
+}
+
+static inline void send_ack(uint8_t req_type, const uint8_t *payload, uint8_t len)
+{
+    send_framed(req_type | FR_ACK_BIT, payload, len);
+}
+
+static inline void send_nack(uint8_t req_type, uint8_t err_code)
+{
+    send_framed(req_type | FR_NACK_BIT, &err_code, 1);
+}
+
+// ── Frame dispatch ──────────────────────────────────────────────────────────
+static void handle_frame(uint8_t type, const uint8_t *payload, uint8_t len)
+{
+    switch (type)
     {
     case MANHA_CAM_CMD_CAPTURE:
     {
         String fname;
         if (capture_and_save(fname))
-        {
-            Serial.print("ACK:");
-            Serial.println(fname);
-        }
+            send_ack(type, (const uint8_t *)fname.c_str(), fname.length());
         else
-        {
-            Serial.println("NACK:capture_failed");
-        }
+            send_nack(type, FR_ERR_CAPTURE);
         break;
     }
     case MANHA_CAM_CMD_STATUS:
     {
         webui.last_status_poll = millis();
-        // Use cached counter instead of scanning SD directory (285+ files = 2.5s)
-        Serial.printf("ACK:count=%u\n", (unsigned)hw.image_counter);
+        uint32_t cnt = hw.image_count;
+        uint8_t p[4] = {
+            (uint8_t)(cnt & 0xFF),
+            (uint8_t)((cnt >> 8) & 0xFF),
+            (uint8_t)((cnt >> 16) & 0xFF),
+            (uint8_t)((cnt >> 24) & 0xFF),
+        };
+        send_ack(type, p, 4);
         break;
     }
     case MANHA_CAM_CMD_SET_SETTINGS:
     {
-        // Fixed-length payload: 1 byte count + count×2 data bytes (no terminator)
-        unsigned long start = millis();
-
-        // Wait for count byte
-        while (!Serial.available() && millis() - start < 500)
-            delay(1);
-        if (!Serial.available())
+        if (len < 1)
         {
-            Serial.println("NACK:no_count");
+            send_nack(type, FR_ERR_BAD_PAYLOAD);
             break;
         }
-
-        uint8_t num_pairs = Serial.read();
-        if (num_pairs == 0 || num_pairs > 21)
+        uint8_t num_pairs = payload[0];
+        if (num_pairs == 0 || num_pairs > 21 || (len - 1) != num_pairs * 2)
         {
-            Serial.printf("NACK:bad_count=%d\n", num_pairs);
+            send_nack(type, FR_ERR_BAD_COUNT);
             break;
         }
-
-        uint8_t buf[42]; // max 21 pairs × 2 bytes
-        int expected = num_pairs * 2;
-        int pos = 0;
-
-        while (pos < expected && millis() - start < 500)
-        {
-            if (Serial.available())
-                buf[pos++] = Serial.read();
-            else
-                delay(1);
-        }
-
-        if (pos != expected)
-        {
-            Serial.printf("NACK:short=%d/%d\n", pos, expected);
-            break;
-        }
-
+        xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
         int applied = 0;
-        for (int i = 0; i < pos; i += 2)
+        for (int i = 0; i < num_pairs; i++)
         {
-            if (set_setting_by_key(buf[i], buf[i + 1]))
+            uint8_t k = payload[1 + i * 2];
+            uint8_t v = payload[1 + i * 2 + 1];
+            if (set_setting_by_key(k, v))
                 applied++;
         }
         apply_settings();
         save_settings();
-        Serial.printf("ACK:settings=%d\n", applied);
+        xSemaphoreGive(hw.cam_mutex);
+        uint8_t a = (uint8_t)applied;
+        send_ack(type, &a, 1);
         break;
     }
     case MANHA_CAM_CMD_GET_SETTINGS:
     {
-        // Fixed-length response: echo + 21 key-value pairs (43 bytes total).
-        // No 0x00 terminator — Pico reads exactly 43 bytes.
-        Serial.write(MANHA_CAM_CMD_GET_SETTINGS);
-        for (uint8_t key = MANHA_CAM_CFG_FRAMESIZE; key <= MANHA_CAM_CFG_VFLIP; key++)
+        uint8_t buf[42]; // 21 KV pairs × 2 bytes
+        int idx = 0;
+        xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
+        for (uint8_t k = MANHA_CAM_CFG_FRAMESIZE; k <= MANHA_CAM_CFG_VFLIP; k++)
         {
-            Serial.write(key);
-            Serial.write(get_setting_by_key(key));
+            buf[idx++] = k;
+            buf[idx++] = get_setting_by_key(k);
         }
+        xSemaphoreGive(hw.cam_mutex);
+        send_ack(type, buf, (uint8_t)idx);
         break;
     }
     case MANHA_CAM_CMD_WEBUI_ON:
     {
         webui_start();
         IPAddress ip = WiFi.softAPIP();
-        Serial.printf("ACK:webui=on,ip=%s\n", ip.toString().c_str());
+        uint8_t p[4] = { ip[0], ip[1], ip[2], ip[3] };
+        send_ack(type, p, 4);
         break;
     }
     case MANHA_CAM_CMD_WEBUI_OFF:
     {
         webui_stop();
-        Serial.println("ACK:webui=off");
+        send_ack(type, nullptr, 0);
+        break;
+    }
+    case MANHA_CAM_CMD_WAKE_PREP:
+    {
+        xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
+        cam_sensor_power_up_locked();
+        wake_prep_deadline_ms = millis() + WAKE_PREP_TIMEOUT_MS;
+        xSemaphoreGive(hw.cam_mutex);
+        send_ack(type, nullptr, 0);
         break;
     }
     default:
-        Serial.printf("NACK:unknown_cmd=0x%02X\n", cmd);
+        send_nack(type, FR_ERR_UNKNOWN_CMD);
         break;
     }
 }
 
-bool external_trigger_capture(String &out_filename)
+// ── Frame parser state machine ──────────────────────────────────────────────
+// Syncs on SYNC (0x55). PREAMBLE bytes before SYNC are silently skipped
+// in the IDLE state — they may be absent/garbled after a wake event, and
+// they are not covered by the CRC anyway.
+enum FrameState : uint8_t {
+    FR_IDLE = 0,
+    FR_LEN,
+    FR_TYPE,
+    FR_PAYLOAD,
+    FR_CRC,
+};
+
+static void serial_cmd_poll()
 {
-    return capture_and_save(out_filename);
+    static FrameState state = FR_IDLE;
+    static uint8_t exp_len = 0;
+    static uint8_t fr_type = 0;
+    static uint8_t payload_buf[FR_MAX_PAYLOAD];
+    static uint16_t payload_idx = 0;
+    static uint8_t crc_buf[FR_CRC_LEN];
+    static uint8_t crc_idx = 0;
+
+    while (Serial.available())
+    {
+        uint8_t b = (uint8_t)Serial.read();
+        switch (state)
+        {
+        case FR_IDLE:
+            if (b == FR_SYNC)
+                state = FR_LEN;
+            // Any other byte (including PREAMBLE or noise) is ignored.
+            break;
+        case FR_LEN:
+            exp_len = b;
+            payload_idx = 0;
+            state = FR_TYPE;
+            break;
+        case FR_TYPE:
+            fr_type = b;
+            crc_idx = 0;
+            state = (exp_len == 0) ? FR_CRC : FR_PAYLOAD;
+            break;
+        case FR_PAYLOAD:
+            payload_buf[payload_idx++] = b;
+            if (payload_idx >= exp_len)
+            {
+                crc_idx = 0;
+                state = FR_CRC;
+            }
+            break;
+        case FR_CRC:
+            crc_buf[crc_idx++] = b;
+            if (crc_idx >= FR_CRC_LEN)
+            {
+                // CRC body: [SYNC, LEN, TYPE, payload]
+                uint8_t hdr[3] = { FR_SYNC, exp_len, fr_type };
+                uint32_t calc = esp_crc32_le(0, hdr, 3);
+                if (exp_len > 0)
+                    calc = esp_crc32_le(calc, payload_buf, exp_len);
+                uint32_t rx = (uint32_t)crc_buf[0]
+                            | ((uint32_t)crc_buf[1] << 8)
+                            | ((uint32_t)crc_buf[2] << 16)
+                            | ((uint32_t)crc_buf[3] << 24);
+                if (calc == rx)
+                    handle_frame(fr_type, payload_buf, exp_len);
+                else
+                    log_send("[FR] CRC mismatch rx=%08x calc=%08x type=0x%02x len=%u\n",
+                             (unsigned)rx, (unsigned)calc, fr_type, exp_len);
+                state = FR_IDLE;
+            }
+            break;
+        }
+    }
 }
 
 // ============================================================================
@@ -601,7 +734,7 @@ static void ensure_image_dir()
 static String next_filename()
 {
     char buf[32];
-    snprintf(buf, sizeof(buf), "/img_%05lu.jpg", (unsigned long)hw.image_counter++);
+    snprintf(buf, sizeof(buf), "/img_%05lu.jpg", (unsigned long)hw.name_counter++);
     return String(IMAGE_DIR) + String(buf);
 }
 
@@ -612,6 +745,7 @@ static void cam_sensor_power_down_locked()
     if (!hw.cam_powered) return;
     digitalWrite(PWDN_GPIO_NUM, HIGH);
     hw.cam_powered = false;
+    wake_prep_deadline_ms = 0;
     log_send("[CAM] PWDN down\n");
 }
 
@@ -660,6 +794,8 @@ bool capture_and_save(String &out_filename)
     file.close();
     esp_camera_fb_return(fb);
     cam_sensor_power_down_locked();
+    if (written > 0)
+        hw.image_count++;
     xSemaphoreGive(hw.cam_mutex);
     log_send("[CAM] %s (%u B)\n", out_filename.c_str(), (unsigned)written);
     return (written > 0);
@@ -671,7 +807,7 @@ bool capture_and_save(String &out_filename)
 static void init_wifi_ap()
 {
     WiFi.mode(WIFI_AP);
-    if (!WiFi.softAP(AP_SSID, AP_PASS, AP_CHANNEL, 0, AP_MAX_CONN))
+    if (!WiFi.softAP(AP_SSID, AP_PASS, 1, 0, AP_MAX_CONN))
     {
         log_send("[WiFi] AP creation failed\n");
         while (1)
@@ -693,6 +829,17 @@ static void webui_start()
 #if ENABLE_CAPTIVE_PORTAL
     dnsServer.start(53, "*", WiFi.softAPIP());
 #endif
+#if ENABLE_MDNS
+    if (MDNS.begin(MDNS_HOSTNAME))
+    {
+        MDNS.addService("http", "tcp", 80);
+        log_send("[mDNS] http://%s.local/\n", MDNS_HOSTNAME);
+    }
+    else
+    {
+        log_send("[mDNS] start failed\n");
+    }
+#endif
     start_http_server();
     webui.active = true;
 }
@@ -702,6 +849,9 @@ static void webui_stop()
     if (!webui.active) return;
 #if ENABLE_CAPTIVE_PORTAL
     dnsServer.stop();
+#endif
+#if ENABLE_MDNS
+    MDNS.end();
 #endif
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
@@ -713,12 +863,24 @@ static void power_mgmt_init()
     esp_pm_config_esp32_t cfg = {
         .max_freq_mhz = CPU_FREQ_MAX_MHZ,
         .min_freq_mhz = CPU_FREQ_MIN_MHZ,
-        .light_sleep_enable = false,
+        .light_sleep_enable = true,
     };
-    if (esp_pm_configure(&cfg) != ESP_OK)
-        log_send("[PM] DFS unavailable\n");
+    esp_err_t rc = esp_pm_configure(&cfg);
+    if (rc != ESP_OK)
+    {
+        log_send("[PM] DFS unavailable (rc=0x%x)\n", rc);
+    }
     else
-        log_send("[PM] DFS %d-%d MHz\n", CPU_FREQ_MIN_MHZ, CPU_FREQ_MAX_MHZ);
+    {
+        log_send("[PM] DFS %d-%d MHz + light sleep\n",
+                 CPU_FREQ_MIN_MHZ, CPU_FREQ_MAX_MHZ);
+    }
+
+    // UART0 wake: CPU resumes full clock when >=3 positive edges seen on RX.
+    // First wake byte (the 0xAA preamble) is consumed by wake machinery.
+    uart_set_wakeup_threshold(UART_NUM_0, UART_WAKE_THRESHOLD);
+    esp_sleep_enable_uart_wakeup(UART_NUM_0);
+    log_send("[PM] UART0 wake enabled (threshold=%d)\n", UART_WAKE_THRESHOLD);
 }
 
 // ============================================================================
@@ -764,8 +926,9 @@ void setup()
                 if (n.startsWith("img_") && n.endsWith(".jpg"))
                 {
                     long num = n.substring(4, n.length() - 4).toInt();
-                    if ((uint32_t)num >= hw.image_counter)
-                        hw.image_counter = num + 1;
+                    if ((uint32_t)num >= hw.name_counter)
+                        hw.name_counter = num + 1;
+                    hw.image_count++;
                 }
                 f.close();
             }
@@ -793,6 +956,15 @@ void loop()
         log_send("[WDG] STATUS not polled for %ds, starting WebUI\n",
                  STATUS_WATCHDOG_MS / 1000);
         webui_start();
+    }
+
+    // Watchdog: auto-park sensor if WAKE_PREP not followed by CAPTURE in time.
+    if (wake_prep_deadline_ms != 0 && (long)(millis() - wake_prep_deadline_ms) >= 0)
+    {
+        log_send("[WDG] WAKE_PREP expired, parking sensor\n");
+        xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
+        cam_sensor_power_down_locked();
+        xSemaphoreGive(hw.cam_mutex);
     }
 
     if (webui.active && millis() - webui.last_log_flush >= LOG_FLUSH_FREQ_MS)

@@ -204,13 +204,21 @@ static esp_err_t handler_api_delete_image(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
+    bool removed = SDFS.remove(resolve_path(name).c_str());
+    if (removed && hw.image_count > 0)
+        hw.image_count--;
+    xSemaphoreGive(hw.cam_mutex);
+
     JsonDocument doc;
-    doc["ok"] = SDFS.remove(resolve_path(name).c_str());
+    doc["ok"] = removed;
     return send_json(req, doc);
 }
 
 static esp_err_t handler_api_clear(httpd_req_t *req)
 {
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
+
     File root    = SDFS.open(IMAGE_DIR);
     uint32_t del = 0;
     if (root && root.isDirectory())
@@ -228,6 +236,11 @@ static esp_err_t handler_api_clear(httpd_req_t *req)
                 del++;
     }
 
+    hw.name_counter = 0;
+    hw.image_count  = 0;
+
+    xSemaphoreGive(hw.cam_mutex);
+
     JsonDocument doc;
     doc["ok"]      = true;
     doc["deleted"] = del;
@@ -240,7 +253,9 @@ static esp_err_t handler_api_get_settings(httpd_req_t *req)
 {
     JsonDocument doc;
     JsonObject obj = doc.to<JsonObject>();
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
     camSettingsToJson(cam_settings, obj);
+    xSemaphoreGive(hw.cam_mutex);
     return send_json(req, doc);
 }
 
@@ -273,6 +288,7 @@ static esp_err_t handler_api_post_settings(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
     jsonToCamSettings(input.as<JsonObject>(), cam_settings);
     apply_settings();
     save_settings();
@@ -280,16 +296,19 @@ static esp_err_t handler_api_post_settings(httpd_req_t *req)
     JsonDocument doc;
     JsonObject obj = doc.to<JsonObject>();
     camSettingsToJson(cam_settings, obj);
+    xSemaphoreGive(hw.cam_mutex);
     return send_json(req, doc);
 }
 
 static esp_err_t handler_api_reset_settings(httpd_req_t *req)
 {
+    xSemaphoreTake(hw.cam_mutex, portMAX_DELAY);
     reset_settings();
 
     JsonDocument doc;
     JsonObject obj = doc.to<JsonObject>();
     camSettingsToJson(cam_settings, obj);
+    xSemaphoreGive(hw.cam_mutex);
     return send_json(req, doc);
 }
 
