@@ -94,3 +94,17 @@ The following JSON fields are transmitted over LoRa from the satkit to the groun
 | `cs_y` | float | -1 | Y-axis Magnetometer Reading | 0.10 | µT |
 | `cs_z` | float | -1 | Z-axis Magnetometer Reading | 0.10 | µT |
 | `gas`  | float | -1 | Gas Resistance in Ohms | 1 | Ohms |
+
+## LED Matrix Status Indicators
+
+The SatKit 8x8 WS2812 LED matrix (data pin GPIO 3) signals runtime state through color. Blink events are ~50 ms fill then clear, and are suppressed while low-power mode is active (except the command-RX indicator and boot/shutdown states).
+
+| Color | Event | Source |
+|-------|-------|--------|
+| `WHITE` | Boot / init (fill, held) | `manha/satkit/manha.py:102` |
+| `BLUE` | LoRa command received (100 ms hold) | `manha/satkit/manha.py:527` |
+| `GREEN` | Telemetry packet TX success | `manha/satkit/manha.py:833` |
+| `MAGENTA` | TX-done wait failed / exit low-power mode | `manha/satkit/manha.py:607`, `manha/satkit/manha.py:835` |
+| `YELLOW` | Enter low-power mode | `manha/satkit/manha.py:598` |
+| `RED` | Sensor task exception / MemoryError during TX | `manha/satkit/manha.py:684`, `manha/satkit/manha.py:840` |
+| `CLEAR` | Shutdown | `manha/satkit/manha.py:877` |
