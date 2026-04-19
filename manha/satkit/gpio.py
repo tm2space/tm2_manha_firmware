@@ -1,2 +1,1 @@
-GP1_PIN = 6
-GP2_PIN = 7
+GP2_PIN = 2

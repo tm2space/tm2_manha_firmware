@@ -1,3 +1,5 @@
+import time
+
 from manha.internals.drivers import BME680_I2C
 from .base import ManhaSensor
 
@@ -5,10 +7,10 @@ from micropython import const
 from machine import I2C
 
 class GasSensor(ManhaSensor):
-    
+
     _DEFAULT_ADDRESS = const(0x77)
     _DEFAULT_REFRESH_RATE = const(1)
-    
+
     def __init__(self, i2c: I2C, address: int = _DEFAULT_ADDRESS, refresh_rate: int = _DEFAULT_REFRESH_RATE) -> None:
         """Initialize the BME680 sensor with I2C interface and address.
 
@@ -18,6 +20,18 @@ class GasSensor(ManhaSensor):
             refresh_rate (int): Refresh rate for sensor data.
         """
         self._bme680 = BME680_I2C(i2c=i2c, address=address, refresh_rate=refresh_rate)
+        # Prime the driver's cache so the first read() returns real data
+        # instead of the None-initialised internals. The BME680 ctor seeds
+        # _last_reading to "now", which makes the first property access hit
+        # the refresh-rate cache and return garbage; back-date it so the
+        # first _perform_reading() runs for real.
+        try:
+            self._bme680._last_reading = time.ticks_add(
+                time.ticks_ms(), -self._bme680._min_refresh_time - 1
+            )
+            _ = self._bme680.temperature
+        except Exception:
+            pass
         
         
     def read(self) -> dict:

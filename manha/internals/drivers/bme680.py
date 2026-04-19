@@ -255,9 +255,9 @@ class Adafruit_BME680:
     def _perform_reading(self):
         """Perform a single-shot reading from the sensor and fill internal data structure for
            calculations"""
-        expired = time.ticks_diff(self._last_reading, time.ticks_ms()) * time.ticks_diff(0, 1)
+        expired = time.ticks_diff(time.ticks_ms(), self._last_reading)
         if 0 <= expired < self._min_refresh_time:
-            time.sleep_ms(self._min_refresh_time - expired)
+            return  # cache hit: reuse previous sample within refresh window
 
         # set filter
         self._write(_BME680_REG_CONFIG, [self._filter << 2])
