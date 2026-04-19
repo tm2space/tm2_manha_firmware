@@ -6,7 +6,6 @@ providing functionality to send commands to and receive telemetry from the satel
 """
 
 from machine import Pin, reset, SPI
-import time
 import asyncio
 import gc
 import sys
@@ -55,15 +54,13 @@ class ManhaGS:
 
         # Current data to transmit periodically
         self.sequence = 0
+        self._tc_seq = 0
 
-        # Create a mutex for received data protection
-        self.data_lock = asyncio.Lock()
         self.received_data = {}
         self.last_received_data = None
 
         # Command system settings
         self.heartbeat_enabled = False
-        self.command_buffer = ""
 
         # Set up command system
         self.commands = {}
@@ -263,17 +260,33 @@ class ManhaGS:
         """
         Task that listens for serial commands and processes them.
 
-        Reads complete lines from stdin. Only processes lines containing
-        the CC: prefix to filter out USB serial loopback noise.
+        Non-blocking chunked read: drains one byte per poll into a buffer,
+        dispatches on newline. Avoids readline() which blocks the asyncio
+        loop until a full line arrives.
         """
         _CMD_PREFIX = "CC:"
+        _MAX_LINE = 256
+        _CHUNK = 1
+        buf = ""
 
         while True:
             if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                line = sys.stdin.readline().strip()
-                idx = line.find(_CMD_PREFIX)
-                if idx != -1:
-                    await self.process_command(line[idx + len(_CMD_PREFIX):])
+                chunk = sys.stdin.read(_CHUNK)
+                if chunk:
+                    for ch in chunk:
+                        if ch == "\n" or ch == "\r":
+                            if buf:
+                                idx = buf.find(_CMD_PREFIX)
+                                if idx != -1:
+                                    await self.process_command(
+                                        buf[idx + len(_CMD_PREFIX):].strip()
+                                    )
+                                buf = ""
+                        else:
+                            buf += ch
+                            if len(buf) > _MAX_LINE:
+                                buf = ""
+                    continue
 
             await asyncio.sleep(0.05)
 
@@ -307,86 +320,23 @@ class ManhaGS:
                 self.heartbeat_enabled = args[0].lower() == "on"
         else:
             # Forward other commands to the satellite
+            self._tc_seq = (self._tc_seq + 1) & 0xFFFF
+            seq = self._tc_seq
+            print(f"TC#{seq}:{command_str}")
             success = await self.send_command(command_str)
+            print(f"TC#{seq}:{'OK' if success else 'FAIL'}")
 
     def show_help(self):
         """Display help information for available commands"""
         pass
 
-    def handle_received_data(self):
-        """
-        Process data received from the satellite
-
-        Args:
-            message (str): The message received from the satellite
-            from_address (int): The address of the sender
-        """
-
-        async def handle_recv(packet):
-
-            from_address = packet.sender_id
-            message = packet.message
-
-            # log to file
-            with open("received_data.log", "a") as log_file:
-                log_file.write(f"{time.time()}: {message}\n")
-
-            # Only process messages from the satellite address
-            if from_address != self.lora_address_to:
-                return
-
-            if message.startswith("STATUS:"):
-                # Handle status response
-                status_data = message[7:].strip()
-                async with self.data_lock:
-                    self.received_data["status"] = status_data
-
-            elif message.startswith("SENSORS:"):
-                # Handle sensor data
-                sensor_data = message[8:].strip()
-                async with self.data_lock:
-                    self.received_data["sensors"] = sensor_data
-
-            elif message.startswith("PING:"):
-                # Handle ping response
-                ping_data = message[5:].strip()
-
-            elif message.startswith("ACK:"):
-                # Handle command acknowledgment
-                ack_data = message[4:].strip()
-
-            elif message.startswith("ERR:"):
-                # Handle error response
-                err_data = message[4:].strip()
-
-            else:
-                # Try to parse as JSON and print only JSON data with \r\n separation
-                try:
-                    # Attempt to parse as JSON to validate it's a valid JSON packet
-                    json.loads(message.decode("utf-8"))
-                    # If successful, print the JSON with \r\n
-                    print(message.decode("utf-8") + "\r\n")
-                    self.last_received_data = message.decode(
-                        "utf-8"
-                    )  # Store raw message
-                except Exception as e:
-                    # Not a valid JSON packet, store but don't print
-                    self.last_received_data = message.decode("utf-8")
-                    print(self.last_received_data)
-
-        return handle_recv
-
     async def handle_telemetry_data(self, data: dict, packet):
         """Handle received telemetry data"""
         try:
-            if packet.addr_to != self.lora_address_to:
+            if packet.addr_to != self.lora_address_from:
                 return
 
-            # Store the received data
-            async with self.data_lock:
-                self.received_data["telemetry"] = data
-
-            # Update last received data for websocket clients
+            self.received_data["telemetry"] = data
             self.last_received_data = json.dumps(data)
 
         except Exception as e:
@@ -395,11 +345,9 @@ class ManhaGS:
     async def handle_command_response(self, response: str, packet):
         """Handle command response"""
         try:
-            if packet.addr_to != self.lora_address_to:
+            if packet.addr_to != self.lora_address_from:
                 return
-            # Store response data
-            async with self.data_lock:
-                self.received_data["command_response"] = response
+            self.received_data["command_response"] = response
 
         except Exception as e:
             print(f"Command response handling error: {e}")

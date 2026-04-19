@@ -67,7 +67,6 @@ class LoRa:
             timeout_ms=timeout_ms,
         )
 
-        self._lock = asyncio.Lock()
         self._receiver_running = False
         self._stop_receiver = False
         self._tx_in_progress = False
