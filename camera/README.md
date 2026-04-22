@@ -218,7 +218,7 @@ machinery, the rest of the frame arrives cleanly into the RX FIFO.
 | Type   | Command      | Request payload          | ACK payload                    |
 |--------|--------------|--------------------------|--------------------------------|
 | `0x01` | CAPTURE      | —                        | filename bytes (UTF-8)         |
-| `0x02` | STATUS       | —                        | `u32_le` image counter         |
+| `0x02` | STATUS       | —                        | `u32_le` image counter + `u8` webui_active |
 | `0x03` | SET_SETTINGS | count `u8` + count×2 KV  | `u8` applied count             |
 | `0x04` | GET_SETTINGS | —                        | 21 KV pairs (42 B)             |
 | `0x05` | WEBUI_ON     | —                        | IP as 4 bytes                  |

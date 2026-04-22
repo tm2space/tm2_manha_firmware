@@ -286,7 +286,7 @@ static void ensure_image_dir();
 
 // ── Request opcodes ─────────────────────────────────────────────────────────
 #define MANHA_CAM_CMD_CAPTURE       0x01  // -> ACK payload: filename bytes (UTF-8)
-#define MANHA_CAM_CMD_STATUS        0x02  // -> ACK payload: u32_le image_count (files on SD)
+#define MANHA_CAM_CMD_STATUS        0x02  // -> ACK payload: u32_le image_count, u8 webui_active
 #define MANHA_CAM_CMD_SET_SETTINGS  0x03  // req payload: count + count*2 KV bytes -> ACK: applied u8
 #define MANHA_CAM_CMD_GET_SETTINGS  0x04  // -> ACK payload: 21 pairs (42 bytes)
 #define MANHA_CAM_CMD_WEBUI_ON      0x05  // -> ACK payload: ip as 4 bytes
@@ -434,13 +434,14 @@ static void handle_frame(uint8_t type, const uint8_t *payload, uint8_t len)
     {
         webui.last_status_poll = millis();
         uint32_t cnt = hw.image_count;
-        uint8_t p[4] = {
+        uint8_t p[5] = {
             (uint8_t)(cnt & 0xFF),
             (uint8_t)((cnt >> 8) & 0xFF),
             (uint8_t)((cnt >> 16) & 0xFF),
             (uint8_t)((cnt >> 24) & 0xFF),
+            (uint8_t)(webui.active ? 1 : 0),
         };
-        send_ack(type, p, 4);
+        send_ack(type, p, 5);
         break;
     }
     case MANHA_CAM_CMD_SET_SETTINGS:

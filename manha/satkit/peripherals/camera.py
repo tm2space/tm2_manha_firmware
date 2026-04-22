@@ -83,6 +83,7 @@ class ManhaCam(ManhaSensor):
         self._timeout_ms = timeout_ms
         self._uart = uart
         self._last_count = -1
+        self._last_webui = 0
         self._last_file = None
         self._last_status_ms = time.ticks_ms()
 
@@ -179,19 +180,21 @@ class ManhaCam(ManhaSensor):
         return "OK" if status == "ACK" else f"ERR:{status}"
 
     async def read(self):
-        """STATUS: read image count from ESP. Also resets ESP watchdog.
+        """STATUS: read image count and webui state from ESP. Resets ESP watchdog.
 
         Returns:
-            dict: {"cam_count": int} on success,
-                  {"cam_count": -1, "error": str} on failure.
+            dict: {"cam_count": int, "cam_webui": 0|1} on success,
+                  {"cam_count": -1, "cam_webui": 0, "error": str} on failure.
         """
         self._last_status_ms = time.ticks_ms()
         status, payload = await self._send_frame(_CMD_STATUS)
-        if status == "ACK" and len(payload) >= 4:
+        if status == "ACK" and len(payload) >= 5:
             self._last_count = int.from_bytes(payload[:4], "little")
-            return {"cam_count": self._last_count}
+            self._last_webui = payload[4] & 1
+            return {"cam_count": self._last_count, "cam_webui": self._last_webui}
         self._last_count = -1
-        return {"cam_count": -1, "error": f"{status}:{payload}"}
+        self._last_webui = 0
+        return {"cam_count": -1, "cam_webui": 0, "error": f"{status}:{payload}"}
 
     @property
     def needs_keepalive(self):
