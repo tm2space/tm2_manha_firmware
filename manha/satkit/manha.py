@@ -218,7 +218,7 @@ class MANHA:
                 data = await self._cam.read()
                 if "error" in data:
                     return f"CAM:FAIL({data['error']})"
-                return f"CAM:count={data['cam_count']}"
+                return f"CAM:count={data['cam_count']},webui={data['cam_webui']}"
         except (IndexError, ValueError) as e:
             return f"Command format error: {e}"
 
@@ -428,7 +428,7 @@ class MANHA:
                     return {"hdrm": -1}
 
             try:
-                self.add_sensor(read_hdrm, essential=False)
+                self.add_sensor(read_hdrm, essential=False, fields=[("hdrm", "b")])
                 print("MHDRM OK")
                 gc.collect()
             except:
@@ -444,11 +444,19 @@ class MANHA:
 
                 async def read_cam():
                     try:
-                        return await self._cam.read()
+                        d = await self._cam.read()
                     except Exception as e:
-                        return {"cam_count": -1, "error": str(e)}
+                        print(f"cam err: {e}")
+                        return {"cam_count": -1, "cam_webui": 0}
+                    # Drop non-packable keys (e.g. 'error' string) before TLV encode
+                    d.pop("error", None)
+                    return d
 
-                self.add_sensor(read_cam, essential=False)
+                self.add_sensor(
+                    read_cam,
+                    essential=False,
+                    fields=[("cam_count", "h"), ("cam_webui", "B")],
+                )
                 gc.collect()
             except Exception as e:
                 print(f"ManhaCam failed: {e}")
@@ -456,23 +464,28 @@ class MANHA:
         # final_memory = gc.mem_free()
         # print(f"Sensor setup complete - Free memory: {final_memory}")
 
-    def add_sensor(self, sensor, essential: bool = False):
+    def add_sensor(self, sensor, essential: bool = False, fields=None):
         """Add a sensor to the telemetry system
 
         Args:
             sensor: Function that returns sensor data dict OR object with read() method
             essential (bool): If True, sensor is always read (even in low-power mode)
+            fields: Optional list of (key_str, fmt_char) tuples declaring dynamic TLV
+                    fields this sensor contributes. Keys appear in the TLM packet tail
+                    and flow end-to-end to the app without schema reflash.
+                    Example: fields=[("m_x","f"),("m_y","f"),("m_z","f")]
         """
         # Memory check before adding sensor
         if gc.mem_free() < 25000:
             # print("Cannot add sensor - insufficient memory")
             return -1
 
+        entry = (sensor, fields or [])
         if essential:
-            self.essential_sensors.append(sensor)
+            self.essential_sensors.append(entry)
             return len(self.essential_sensors) - 1
         else:
-            self.non_essential_sensors.append(sensor)
+            self.non_essential_sensors.append(entry)
             return len(self.non_essential_sensors) - 1
 
     async def blink_led_matrix(self, color):
@@ -619,7 +632,7 @@ class MANHA:
                 temp_telemetry = {}
 
                 # Read essential sensors
-                for i, sensor in enumerate(self.essential_sensors):
+                for i, (sensor, _fields) in enumerate(self.essential_sensors):
                     try:
                         data = None
                         if callable(sensor):
@@ -656,7 +669,7 @@ class MANHA:
 
                 # Read non-essential sensors if not in low power mode
                 if not self.low_power_mode:
-                    for i, sensor in enumerate(self.non_essential_sensors):
+                    for i, (sensor, _fields) in enumerate(self.non_essential_sensors):
                         try:
                             data = None
                             if callable(sensor):
@@ -781,11 +794,20 @@ class MANHA:
                 # Binary protocol path
                 from manha.internals.comms.binary_tlm import encode_tlm
 
+                ext = []
+                for _s, f in self.essential_sensors:
+                    if f:
+                        ext.extend(f)
+                for _s, f in self.non_essential_sensors:
+                    if f:
+                        ext.extend(f)
+
                 tlm_bytes = encode_tlm(
                     tlm_data_copy,
                     self._seq_number,
                     self.low_power_mode,
                     time.ticks_ms(),
+                    ext_fields=ext,
                 )
                 self._seq_number = (self._seq_number + 1) & 0xFF
                 return tlm_bytes, MSG_TM
