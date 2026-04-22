@@ -194,16 +194,6 @@ void jsonToCamSettings(JsonObject obj, CamSettings &cs)
 
 void camInfoToJson(JsonObject obj)
 {
-    sensor_t *s = esp_camera_sensor_get();
-    if (s)
-    {
-        obj["pid"]    = s->id.PID;
-        obj["sensor"] = s->id.PID == OV3660_PID ? "OV3660"
-                      : s->id.PID == OV2640_PID ? "OV2640"
-                      : s->id.PID == OV5640_PID ? "OV5640"
-                                                 : "Unknown";
-    }
-
     struct FsEntry { framesize_t fs; const char *name; int w; int h; };
     static const FsEntry FS_TABLE[] = {
         {FRAMESIZE_QQVGA,   "QQVGA",    160,  120},
@@ -497,8 +487,10 @@ static void handle_frame(uint8_t type, const uint8_t *payload, uint8_t len)
     }
     case MANHA_CAM_CMD_WEBUI_OFF:
     {
-        webui_stop();
+        // ACK first: webui_stop() blocks 1-3s on WiFi.softAPdisconnect().
+        // Caller's timeout is short; deferring ACK guarantees late/stale bytes.
         send_ack(type, nullptr, 0);
+        webui_stop();
         break;
     }
     case MANHA_CAM_CMD_WAKE_PREP:
@@ -832,13 +824,27 @@ static void webui_start()
         log_send("[mDNS] start failed\n");
     }
 #endif
-    start_http_server();
+    if (!start_http_server())
+    {
+        // Roll back WiFi + mDNS so next WEBUI_ON retries from a clean slate
+#if ENABLE_CAPTIVE_PORTAL
+        dnsServer.stop();
+#endif
+#if ENABLE_MDNS
+        MDNS.end();
+#endif
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_OFF);
+        webui.active = false;
+        return;
+    }
     webui.active = true;
 }
 
 static void webui_stop()
 {
     if (!webui.active) return;
+    stop_http_server();
 #if ENABLE_CAPTIVE_PORTAL
     dnsServer.stop();
 #endif

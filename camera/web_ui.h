@@ -158,7 +158,6 @@ button:hover{border-color:var(--accent)}button:active{transform:scale(.97)}
           <div class="info-card"><div class="info-label">SD Card</div><div class="info-value ok" id="sys-sd">&mdash;</div></div>
           <div class="info-card"><div class="info-label">Free Space</div><div class="info-value" id="sys-free">&mdash;</div></div>
           <div class="info-card"><div class="info-label">Images</div><div class="info-value" id="sys-images">&mdash;</div></div>
-          <div class="info-card"><div class="info-label">Sensor</div><div class="info-value" id="sys-sensor">&mdash;</div></div>
         </div>
       </div>
       <div class="sys-section">
@@ -330,7 +329,7 @@ async function applySettings(){let btn=document.getElementById('btn-apply');btn.
 async function factoryReset(){if(!confirm('Reset all camera settings to factory defaults?'))return;let btn=document.getElementById('btn-reset');btn.disabled=true;status('Resetting...','info');try{let r=await apiFetch('/api/settings/reset',{method:'POST'});currentSettings=await r.json();settingsToUI(currentSettings);highlightPreset();status('Factory reset complete','ok')}catch(e){}btn.disabled=false}
 async function loadSettings(){try{let r=await apiFetch('/api/settings');currentSettings=await r.json();settingsToUI(currentSettings);highlightPreset()}catch(e){}}
 async function loadPresets(){try{let r=await apiFetch('/api/presets');presets=await r.json();document.querySelectorAll('.preset-bar').forEach(function(bar){bar.innerHTML=presets.map(function(p,i){return '<button class="btn-sm" data-pi="'+i+'" onclick="selectPreset('+i+')">'+p.name+'</button>'}).join('')})}catch(e){}}
-async function loadCameraInfo(){try{let r=await apiFetch('/api/camera/info');let info=await r.json();let sel=document.getElementById('s-framesize');sel.innerHTML='';(info.framesizes||[]).forEach(function(f){let opt=document.createElement('option');opt.value=f.value;opt.textContent=f.name+' ('+f.width+'x'+f.height+')';sel.appendChild(opt)});if(info.sensor){let sub=document.querySelector('.header .subtitle');if(sub)sub.dataset.sensor=info.sensor}}catch(e){}}
+async function loadCameraInfo(){try{let r=await apiFetch('/api/camera/info');let info=await r.json();let sel=document.getElementById('s-framesize');sel.innerHTML='';(info.framesizes||[]).forEach(function(f){let opt=document.createElement('option');opt.value=f.value;opt.textContent=f.name+' ('+f.width+'x'+f.height+')';sel.appendChild(opt)})}catch(e){}}
 
 function bindSettingsListeners(){
   RANGE_FIELDS.forEach(function(k){let el=document.getElementById('s-'+k);if(el)el.addEventListener('input',function(){let vEl=document.getElementById('v-'+k);if(vEl)vEl.textContent=el.value;markUnsaved()})});

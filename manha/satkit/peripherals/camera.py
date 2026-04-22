@@ -86,6 +86,10 @@ class ManhaCam(ManhaSensor):
         self._last_webui = 0
         self._last_file = None
         self._last_status_ms = time.ticks_ms()
+        # Serialise access to the UART across concurrent tasks (sensor poll vs
+        # user commands). Without this, a send()'s RX drain wipes another
+        # call's in-flight reply.
+        self._lock = asyncio.Lock()
 
     # ── Low-level frame I/O ─────────────────────────────────────────────────
     async def _send_frame(self, opcode, payload=b"", timeout_ms=None):
@@ -99,15 +103,16 @@ class ManhaCam(ManhaSensor):
         if timeout_ms is None:
             timeout_ms = self._timeout_ms
 
-        while self._uart.any():
-            self._uart.read()
+        async with self._lock:
+            while self._uart.any():
+                self._uart.read()
 
-        self._uart.write(_build_frame(opcode, payload))
-        # Give ESP time to clock back up from light sleep before it starts
-        # parsing. Preamble already fired the wake; this covers DFS ramp.
-        await asyncio.sleep_ms(_WAKE_SETTLE_MS)
+            self._uart.write(_build_frame(opcode, payload))
+            # Give ESP time to clock back up from light sleep before it starts
+            # parsing. Preamble already fired the wake; this covers DFS ramp.
+            await asyncio.sleep_ms(_WAKE_SETTLE_MS)
 
-        return await self._read_frame(opcode, timeout_ms)
+            return await self._read_frame(opcode, timeout_ms)
 
     async def _read_frame(self, expected_opcode, timeout_ms):
         """Read bytes until a valid frame addressed to expected_opcode arrives,

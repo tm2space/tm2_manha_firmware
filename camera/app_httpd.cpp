@@ -526,18 +526,36 @@ static esp_err_t handler_captive_redirect(httpd_req_t *req, httpd_err_code_t err
 
 static httpd_handle_t http_server = NULL;
 
-void start_http_server()
+void stop_http_server()
 {
+    if (http_server == NULL) return;
+    esp_err_t rc = httpd_stop(http_server);
+    if (rc != ESP_OK)
+    {
+        log_send("[HTTP] stop rc=0x%x (handle cleared anyway)\n", rc);
+    }
+    http_server = NULL;
+}
+
+bool start_http_server()
+{
+    // Idempotent: skip if already running. webui_stop() is the only path
+    // that should ever release the handle.
+    if (http_server != NULL) return true;
+
     httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers  = 16;
     config.stack_size        = 8192;
     config.max_open_sockets  = 7;
     config.lru_purge_enable  = true;
 
-    if (httpd_start(&http_server, &config) != ESP_OK)
+    esp_err_t rc = httpd_start(&http_server, &config);
+    if (rc != ESP_OK)
     {
-        log_send("[HTTP] Server start FAILED\n");
-        return;
+        log_send("[HTTP] Server start FAILED rc=0x%x heap=%u\n",
+                 rc, (unsigned)ESP.getFreeHeap());
+        http_server = NULL;
+        return false;
     }
 
     httpd_uri_t u;
@@ -625,4 +643,5 @@ void start_http_server()
 #endif
 
     log_send("[HTTP] Server started on port 80\n");
+    return true;
 }

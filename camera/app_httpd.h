@@ -108,6 +108,7 @@ void log_flush();
 
 // ── HTTP server ─────────────────────────────────────────────────────────────
 
-void start_http_server();
+bool start_http_server();
+void stop_http_server();
 
 #endif // APP_HTTPD_H
