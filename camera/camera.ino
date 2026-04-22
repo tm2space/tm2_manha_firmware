@@ -25,6 +25,7 @@
 #include "driver/gpio.h"      // direct PWDN drive
 #include "driver/uart.h"      // UART wake threshold
 #include "esp_crc.h"          // esp_crc32_le for frame CRC
+#include "nvs_flash.h"        // nvs_flash_erase for factory reset
 
 #include <Preferences.h>
 
@@ -58,8 +59,6 @@ static const bool SD_MMC_1BIT_MODE = true;
 static Preferences prefs;
 CamSettings cam_settings;
 
-static const uint8_t SETTINGS_VERSION = 3;
-
 // Named presets — index 0 is the default applied on first boot
 // Struct field order: framesize, quality, brightness, contrast, saturation,
 //   special_effect, wb_mode, awb, awb_gain, aec, aec2, ae_level,
@@ -70,9 +69,9 @@ static const uint8_t SETTINGS_VERSION = 3;
 const Preset PRESETS[] = {
     //                  fs               q  br  co  sa  fx wb  awb ag aec ae2 ael agc  ag gc bpc wpc gma len hm vf
     {"Default",      {FRAMESIZE_SVGA,  12,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 1}},
-    {"High Quality", {FRAMESIZE_UXGA,  10,  0,  1,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
-    {"Low Light",    {FRAMESIZE_SVGA,  12,  1,  0,  0,  0, 0,  1, 1,  1, 1,  1,  1, 20, 5,  1,  1,  1,  1, 0, 0}},
-    {"Fast Capture", {FRAMESIZE_QVGA,  20,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
+    {"High Quality", {FRAMESIZE_UXGA,  10,  0,  1,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 1}},
+    {"Low Light",    {FRAMESIZE_SVGA,  12,  1,  0,  0,  0, 0,  1, 1,  1, 1,  1,  1, 20, 5,  1,  1,  1,  1, 0, 1}},
+    {"Fast Capture", {FRAMESIZE_QVGA,  20,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 1}},
 };
 const int NUM_PRESETS = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -112,7 +111,6 @@ void apply_settings()
 void save_settings()
 {
     prefs.begin("cam", false);
-    prefs.putUChar("ver", SETTINGS_VERSION);
     prefs.putBytes("s", &cam_settings, sizeof(cam_settings));
     prefs.putBool("saved", true);
     prefs.end();
@@ -121,33 +119,26 @@ void save_settings()
 static void load_settings()
 {
     prefs.begin("cam", true);
-    uint8_t ver    = prefs.getUChar("ver", 0);
     bool has_saved = prefs.getBool("saved", false);
-    if (has_saved && ver == SETTINGS_VERSION)
+    if (has_saved)
     {
         prefs.getBytes("s", &cam_settings, sizeof(cam_settings));
-        log_send("[NVS] Settings v%d loaded\n", ver);
+        log_send("[NVS] Settings loaded\n");
     }
     else
     {
         cam_settings = PRESETS[0].s;
-        if (has_saved)
-            log_send("[NVS] Version mismatch (got %d, want %d), using defaults\n",
-                     ver, SETTINGS_VERSION);
-        else
-            log_send("[NVS] No saved settings, using defaults\n");
+        log_send("[NVS] Using default\n");
     }
     prefs.end();
 }
 
 void reset_settings()
 {
-    prefs.begin("cam", false);
-    prefs.clear();
-    prefs.end();
+    nvs_flash_erase();
+    nvs_flash_init();
     cam_settings = PRESETS[0].s;
     apply_settings();
-    save_settings();
     log_send("[NVS] Factory reset\n");
 }
 

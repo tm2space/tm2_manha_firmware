@@ -142,6 +142,7 @@ static esp_err_t handler_api_images(httpd_req_t *req)
                     JsonObject f = files.add<JsonObject>();
                     f["name"]    = String(e.name());
                     f["size"]    = e.size();
+                    f["mtime"]   = (uint32_t)e.getLastWrite();
                 }
                 e.close();
             }
@@ -527,9 +528,11 @@ static httpd_handle_t http_server = NULL;
 
 void start_http_server()
 {
-    httpd_config_t config   = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
-    config.stack_size       = 8192;
+    httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
+    config.max_uri_handlers  = 16;
+    config.stack_size        = 8192;
+    config.max_open_sockets  = 7;
+    config.lru_purge_enable  = true;
 
     if (httpd_start(&http_server, &config) != ESP_OK)
     {
