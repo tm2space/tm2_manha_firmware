@@ -58,7 +58,7 @@ static const bool SD_MMC_1BIT_MODE = true;
 static Preferences prefs;
 CamSettings cam_settings;
 
-static const uint8_t SETTINGS_VERSION = 2;  // bumped: CamSettings padded to 24 bytes
+static const uint8_t SETTINGS_VERSION = 3;
 
 // Named presets — index 0 is the default applied on first boot
 // Struct field order: framesize, quality, brightness, contrast, saturation,
@@ -69,7 +69,7 @@ static const uint8_t SETTINGS_VERSION = 2;  // bumped: CamSettings padded to 24 
 // gainceiling: 0=2x, 1=4x, 2=8x, 3=16x, 4=32x, 5=64x, 6=128x
 const Preset PRESETS[] = {
     //                  fs               q  br  co  sa  fx wb  awb ag aec ae2 ael agc  ag gc bpc wpc gma len hm vf
-    {"Default",      {FRAMESIZE_SVGA,  12,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
+    {"Default",      {FRAMESIZE_SVGA,  12,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 1}},
     {"High Quality", {FRAMESIZE_UXGA,  10,  0,  1,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
     {"Low Light",    {FRAMESIZE_SVGA,  12,  1,  0,  0,  0, 0,  1, 1,  1, 1,  1,  1, 20, 5,  1,  1,  1,  1, 0, 0}},
     {"Fast Capture", {FRAMESIZE_QVGA,  20,  0,  0,  0,  0, 0,  1, 1,  1, 1,  0,  1,  0, 2,  1,  1,  1,  1, 0, 0}},
