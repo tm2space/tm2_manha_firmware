@@ -224,10 +224,10 @@ class RFM9x(object):
 
     def send(self, data: bytes) -> bool:
         """Send raw bytes data packet
-        
+
         Args:
             data: Raw bytes data to be transmitted
-            
+
         Returns:
             bool: True if data was successfully queued for transmission
         """
@@ -247,7 +247,13 @@ class RFM9x(object):
         else:
             print("Invalid data type")
             return False
-        
+
+        # SX1276 FIFO + payload-length register are both 8-bit; anything >255 B
+        # silently corrupts (FIFO wraps, length register truncates mod 256).
+        if len(data_bytes) > 255:
+            print(f"CMD:TX rejected, {len(data_bytes)} > 255")
+            return False
+
 
         self._spi_write(REG_0D_FIFO_ADDR_PTR, 0)
         self._spi_write(REG_00_FIFO, data_bytes)
