@@ -16,7 +16,7 @@ DEFAULTS = {
     "password": "space1234",
     "pwm_freq": 400,
     "min_us": 1000,
-    "center_us": 1490,
+    "center_us": 1500,
     "max_us": 2000,
     "bidirectional": True,
     "deadman_ms": 1500,
