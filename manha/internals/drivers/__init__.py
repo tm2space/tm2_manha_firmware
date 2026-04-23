@@ -8,6 +8,7 @@ from .battery_adc import BatteryVoltage
 from .servo import Servo
 from .rfm9x import RFM9x, ModemConfig
 from . import rfm9x_constants
+from .tsl2561 import TSL2561
 
 """
 MANHA Satellite Kit Sensor Drivers Package
@@ -30,4 +31,5 @@ __all__ = [
     "RFM9x",
     "ModemConfig",
     "rfm9x_constants",
+    "TSL2561",
 ]

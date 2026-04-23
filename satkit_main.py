@@ -36,7 +36,7 @@ def main():
     manha.setup_default_sensors()
 
     try:
-        compass = Compass(manha.i2c)
+        compass = Compass(manha.i2c1)
 
         manha.add_sensor(compass)
     except Exception as e:

@@ -17,6 +17,7 @@ __all__ = [
     "GPS",
     "MHDRM",
     "ManhaCam",
+    "FineSunSensor",
 ]
 
 from .ledmatrix import LEDMatrix
@@ -27,6 +28,7 @@ from .powermon import PowerMonitor
 from .gps import GPS
 from .hdrm import MHDRM
 from .camera import ManhaCam
+from .fss import FineSunSensor
 from .base import ManhaSensor
 
 from manha.internals.drivers import PixelColors

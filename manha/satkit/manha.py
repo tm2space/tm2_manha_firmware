@@ -29,9 +29,14 @@ from .constants import *
 
 class MANHA:
     @property
-    def i2c(self):
-        """Get I2C Instance"""
-        return i2c.m_i2c
+    def i2c1(self):
+        """Get primary I2C bus instance (I2C1, SCL=GP19, SDA=GP18)."""
+        return i2c.m_i2c1
+
+    @property
+    def i2c2(self):
+        """Get secondary I2C bus instance (I2C0, SCL=GP21, SDA=GP20)."""
+        return i2c.m_i2c2
 
     @property
     def uart0(self):
@@ -312,7 +317,7 @@ class MANHA:
                     from manha.satkit.peripherals import PowerMonitor
 
                     self._pwr_mon = PowerMonitor(
-                        shunt_ohms=0.1, i2c=i2c.m_i2c, max_expected_amps=3.0
+                        shunt_ohms=0.1, i2c=i2c.m_i2c1, max_expected_amps=3.0
                     )
                 pwr_rd = self._pwr_mon.read()
                 return pwr_rd
@@ -363,7 +368,7 @@ class MANHA:
             def read_imu():
                 try:
                     if not hasattr(self, "_adxl345"):
-                        self._adxl345 = ADXL345(i2c=i2c.m_i2c)
+                        self._adxl345 = ADXL345(i2c=i2c.m_i2c1)
                     return {
                         "a_x": self._adxl345.xValue,
                         "a_y": self._adxl345.yValue,
@@ -387,7 +392,7 @@ class MANHA:
             def read_env():
                 try:
                     if not hasattr(self, "_gas"):
-                        self._gas = GasSensor(i2c.m_i2c, address=0x77, refresh_rate=50)
+                        self._gas = GasSensor(i2c.m_i2c1, address=0x77, refresh_rate=50)
                     d = self._gas.read()
                     return {"temp": d["tmp"], "pres": d["prs"], "hum": d["hum"]}
                 except:
@@ -460,6 +465,30 @@ class MANHA:
                 gc.collect()
             except Exception as e:
                 print(f"ManhaCam failed: {e}")
+
+        # Fine Sun Sensor setup (guarded by config flag)
+        if ENABLE_FSS:
+
+            def read_fss():
+                try:
+                    if not hasattr(self, "_fss"):
+                        from manha.satkit.peripherals import FineSunSensor
+
+                        self._fss = FineSunSensor(i2c.m_i2c1)
+                    return self._fss.read()
+                except:
+                    return {"fss_lux": -1, "fss_bb": -1, "fss_ir": -1}
+
+            try:
+                self.add_sensor(
+                    read_fss,
+                    essential=False,
+                    fields=[("fss_lux", "f"), ("fss_bb", "i"), ("fss_ir", "i")],
+                )
+                print("FSS (TSL2561) OK")
+                gc.collect()
+            except:
+                print("FSS failed")
 
         # final_memory = gc.mem_free()
         # print(f"Sensor setup complete - Free memory: {final_memory}")
